@@ -4,7 +4,9 @@ Pra evitar que o arquivo fique muito grande, apenas as chamadas com argumentos
 acima de 100 caracteres terão quebras de linhas.
 """
 
-from driftbrake.classifiers.type_compatibility import classify_type_change
+import pytest
+
+from driftbrake.classifiers.type_compatibility import _canonicalize_type, classify_type_change
 from driftbrake.models import Severity
 
 
@@ -93,3 +95,60 @@ class TestUnknownTypeFallback:
     def test_completely_different_types_are_breaking(self):
         assert classify_type_change("uuid", "bytea") == Severity.BREAKING
         assert classify_type_change("jsonb", "text") == Severity.BREAKING
+
+
+class TestTypeCanonicalizer:
+    """Garante que aliases do catálogo do PostgreSQL sejam normalizados para o nome canônico.
+
+    Se o SQLAlchemy emitir um alias em vez do nome padrão entre uma leitura e outra,
+    o comparador NÃO deve gerar um type_changed fantasma.
+    """
+
+    @pytest.mark.parametrize(
+        "alias, canonical",
+        [
+            ("character varying", "varchar"),
+            ("character varying(100)", "varchar(100)"),
+            ("character varying(255)", "varchar(255)"),
+            ("decimal", "numeric"),
+            ("decimal(10,2)", "numeric(10,2)"),
+            ("decimal(18,4)", "numeric(18,4)"),
+            ("int8", "bigint"),
+            ("int4", "integer"),
+            ("int2", "smallint"),
+            ("float8", "double precision"),
+            ("float4", "real"),
+            ("bool", "boolean"),
+            ("timestamp without time zone", "timestamp"),
+            ("timestamp with time zone", "timestamptz"),
+            ("time without time zone", "time"),
+            ("time with time zone", "timetz"),
+            ("character", "char"),
+            ("character(10)", "char(10)"),
+        ],
+    )
+    def test_alias_maps_to_canonical(self, alias: str, canonical: str):
+        assert _canonicalize_type(alias) == canonical
+
+    @pytest.mark.parametrize(
+        "alias_a, alias_b",
+        [
+            # Par de aliases que representam o MESMO tipo — diff deve ser SAFE
+            ("character varying(100)", "VARCHAR(100)"),
+            # decimal é alias exato de numeric no catálogo do PostgreSQL
+            ("decimal", "numeric"),
+            ("decimal(10,2)", "NUMERIC(10,2)"),
+            ("decimal(10,2)", "numeric(10,2)"),
+            ("int4", "INTEGER"),
+            ("int8", "BIGINT"),
+            ("bool", "BOOLEAN"),
+            ("timestamp without time zone", "TIMESTAMP"),
+            ("timestamp with time zone", "TIMESTAMPTZ"),
+            ("float8", "double precision"),
+            ("float4", "REAL"),
+        ],
+    )
+    def test_equivalent_aliases_produce_no_diff(self, alias_a: str, alias_b: str):
+        """Ler o mesmo banco duas vezes com representações distintas não gera type_changed."""
+        assert classify_type_change(alias_a, alias_b) == Severity.SAFE
+        assert classify_type_change(alias_b, alias_a) == Severity.SAFE

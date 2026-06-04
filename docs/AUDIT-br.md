@@ -256,6 +256,23 @@ overrides:
 
 Quando o tipo de uma coluna muda, o DriftBrake consulta o módulo de compatibilidade de tipos antes de decidir a severidade. A matriz abaixo cobre as conversões mais comuns. Conversões não listadas defaultam para **BREAKING**.
 
+> **Canonicalização de tipos (v0.1.1):** Antes de qualquer comparação, o DriftBrake normaliza os aliases do catálogo do PostgreSQL para seus nomes canônicos. Isso evita eventos `type_changed` fantasmas causados por diferenças de representação entre versões do SQLAlchemy ou configurações de driver:
+>
+> | Alias (como o PostgreSQL pode reportar) | Canônico (usado internamente) |
+> |---|---|
+> | `character varying(N)` | `varchar(N)` |
+> | `decimal` / `decimal(p,s)` | `numeric` / `numeric(p,s)` |
+> | `int4` | `integer` |
+> | `int8` | `bigint` |
+> | `int2` | `smallint` |
+> | `float8` | `double precision` |
+> | `float4` | `real` |
+> | `bool` | `boolean` |
+> | `timestamp without time zone` | `timestamp` |
+> | `timestamp with time zone` | `timestamptz` |
+>
+> Dois strings de tipo que são aliases diferentes para o mesmo tipo físico sempre produzirão `SAFE`.
+
 ### Strings
 
 | Conversão | Severidade | Raciocínio |
@@ -553,6 +570,10 @@ Uma coluna NOT NULL adicionada sem default é BREAKING. O mesmo change type `col
 ### `possible_rename` + tipos incompatíveis = drop e add separados
 
 Se uma coluna removida e uma coluna adicionada têm tipos BREAKING-incompatíveis, o heurístico de rename não dispara. O resultado é um `column_removed` (BREAKING) + um `nullable_column_added` (SAFE) ou `column_added` (WARNING/BREAKING), dependendo das propriedades da coluna adicionada. Isso reflete uma substituição semântica real, não um rename.
+
+### Formato `driftbrake.yml` depreciado (v0.1.1)
+
+Carregar arquivos `driftbrake.yml` que usam as chaves aninhadas `tables.ignore` / `columns.ignore` (formato v0.0.2) agora emite `DeprecationWarning` em tempo de execução. Este formato será removido na v0.2.0. Migre para `driftbrake.policy.yml` com as chaves planas `ignore_tables` / `ignore_columns`. Os dois formatos são aplicados em etapas diferentes do pipeline (Settings pré-comparação; Policy pós-comparação) e não conflitam quando ambos estão presentes — veja DOCUMENTATION-br.md § *Arquivos de política* para o contrato de precedência.
 
 <br>
 

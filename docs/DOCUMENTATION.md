@@ -214,6 +214,9 @@ columns:
 
 Pass the file to the CLI with `--config driftbrake.yml`, or to `SchemaGuard` with `config_path="driftbrake.yml"`.
 
+> [!WARNING]
+> **`driftbrake.yml` (v0.0.2 format) is deprecated as of v0.1.1.** The nested keys `tables.ignore` / `columns.ignore` will emit a `DeprecationWarning` at load time and will be removed in v0.2.0. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`. See the [Policy files](#policy-files) section below.
+
 > For the new policy file format used by the `DriftBrake` facade (`driftbrake.policy.yml` with `overrides`, `ignore_tables`, `ignore_columns`), see the [Policy files](#policy-files) section below.
 
 ---
@@ -993,8 +996,8 @@ DriftBrake(
 |---|---|---|
 | `database_url` | required | Full PostgreSQL connection URL |
 | `contract_path` | `"schema.lock.json"` | Path to the contract file |
-| `config_path` | `None` | Path to `driftbrake.yml` (v0.0.2-style config) |
-| `policy_path` | `None` | Path to `driftbrake.policy.yml` (v0.1.0-style policy) |
+| `config_path` | `None` | Path to `driftbrake.yml` (v0.0.2-style config, **deprecated** — emits `DeprecationWarning`) |
+| `policy_path` | `None` | Path to `driftbrake.policy.yml` (v0.1.0-style policy, preferred) |
 | `auto_init` | `True` | If `True`, creates the contract automatically on first run |
 | `interactive` | `"auto"` | See [interactive parameter](#the-interactive-parameter) section |
 | `ask_on` | `["WARNING"]` | Severities that trigger a confirmation prompt |
@@ -1128,6 +1131,20 @@ overrides:
 
 > [!NOTE]
 > `apply_policy` is a pure function — it does not mutate the original `DiffResult`. It always returns a new object. This makes it safe to call multiple times or inspect the pre-policy result for comparison.
+
+**Precedence: `config_path` (Settings) vs. `policy_path` (Policy)**
+
+When both `config_path` and `policy_path` are provided, they operate at **different stages of the pipeline** and do not conflict:
+
+| Layer | File | Applied | Effect |
+|---|---|---|---|
+| Settings (`config_path`) | `driftbrake.yml` | **Before** comparison | Filters tables/columns so they are never compared; controls `fail_on` / `warn_on` thresholds |
+| Policy (`policy_path`) | `driftbrake.policy.yml` | **After** comparison | Removes or re-classifies changes that were already detected |
+
+A table listed in both `tables.ignore` (Settings) and `ignore_tables` (Policy) is simply never compared — the Policy filter is a no-op for it. There is no conflict; the Settings layer wins by eliminating the change before the Policy layer sees it.
+
+> [!WARNING]
+> `config_path` (`driftbrake.yml`) is **deprecated as of v0.1.1** and will be removed in v0.2.0. Prefer `policy_path` (`driftbrake.policy.yml`) for all new integrations.
 
 For the full classification rules that overrides modify, see [`AUDIT.md`](AUDIT.md).
 

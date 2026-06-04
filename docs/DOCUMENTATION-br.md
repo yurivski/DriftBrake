@@ -214,6 +214,9 @@ columns:
 
 Passe o arquivo para a CLI com `--config driftbrake.yml` ou para o `SchemaGuard` com `config_path="driftbrake.yml"`.
 
+> [!WARNING]
+> **`driftbrake.yml` (formato v0.0.2) está depreciado a partir da v0.1.1.** As chaves aninhadas `tables.ignore` / `columns.ignore` emitirão `DeprecationWarning` no carregamento e serão removidas na v0.2.0. Migre para `driftbrake.policy.yml` com as chaves planas `ignore_tables` / `ignore_columns`. Veja a seção [Arquivos de política](#arquivos-de-política) abaixo.
+
 > Para o novo formato de arquivo de política usado pela classe `DriftBrake` (`driftbrake.policy.yml` com `overrides`, `ignore_tables`, `ignore_columns`), veja a seção [Arquivos de política](#arquivos-de-política) abaixo.
 
 ---
@@ -993,8 +996,8 @@ DriftBrake(
 |---|---|---|
 | `database_url` | obrigatório | URL completa de conexão com o PostgreSQL |
 | `contract_path` | `"schema.lock.json"` | Caminho para o arquivo de contrato |
-| `config_path` | `None` | Caminho para `driftbrake.yml` (configuração estilo v0.0.2) |
-| `policy_path` | `None` | Caminho para `driftbrake.policy.yml` (política estilo v0.1.0) |
+| `config_path` | `None` | Caminho para `driftbrake.yml` (configuração estilo v0.0.2, **depreciado** — emite `DeprecationWarning`) |
+| `policy_path` | `None` | Caminho para `driftbrake.policy.yml` (política estilo v0.1.0, preferencial) |
 | `auto_init` | `True` | Se `True`, cria o contrato automaticamente na primeira execução |
 | `interactive` | `"auto"` | Veja a seção [parâmetro interactive](#o-parâmetro-interactive) |
 | `ask_on` | `["WARNING"]` | Severidades que disparam um prompt de confirmação |
@@ -1128,6 +1131,20 @@ overrides:
 
 > [!NOTE]
 > `apply_policy` é uma função pura, não muta o `DiffResult` original. Sempre retorna um novo objeto. Isso torna seguro chamá-la múltiplas vezes ou inspecionar o resultado pré-política para comparação.
+
+**Precedência: `config_path` (Settings) e `policy_path` (Policy)**
+
+Quando ambos `config_path` e `policy_path` são fornecidos, eles operam em **etapas diferentes do pipeline** e não entram em conflito:
+
+| Camada | Arquivo | Aplicado | Efeito |
+|---|---|---|---|
+| Settings (`config_path`) | `driftbrake.yml` | **Antes** da comparação | Filtra tabelas/colunas para que nunca sejam comparadas; controla os limiares `fail_on` / `warn_on` |
+| Policy (`policy_path`) | `driftbrake.policy.yml` | **Depois** da comparação | Remove ou reclassifica mudanças que já foram detectadas |
+
+Uma tabela listada tanto em `tables.ignore` (Settings) quanto em `ignore_tables` (Policy) simplesmente nunca é comparada — o filtro da Policy é no-op para ela. Não há conflito; a camada de Settings vence ao eliminar a mudança antes que a camada de Policy a veja.
+
+> [!WARNING]
+> `config_path` (`driftbrake.yml`) está **depreciado a partir da v0.1.1** e será removido na v0.2.0. Prefira `policy_path` (`driftbrake.policy.yml`) para todas as novas integrações.
 
 Para as regras de classificação completas que os overrides modificam, veja [`AUDIT-br.md`](AUDIT-br.md).
 

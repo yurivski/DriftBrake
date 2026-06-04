@@ -44,7 +44,7 @@ from driftbrake.readers.json_reader import JsonSchemaReader
 from driftbrake.readers.postgres import PostgresSchemaReader
 from driftbrake.reporters.facade_terminal import FacadeTerminalReporter as TerminalReporter
 
-__version__ = "0.1.0"
+__version__ = "0.1.1"
 
 __all__ = [
     # v0.1.0 facade

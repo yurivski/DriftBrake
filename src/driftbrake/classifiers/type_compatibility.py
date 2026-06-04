@@ -49,9 +49,45 @@ _COMPAT_RULES: list[tuple[str, str, Severity]] = [
 ]
 
 
+# Aliases do catálogo do PostgreSQL -> nome canônico usado internamente.
+# Garante que leituras via SQLAlchemy em versões diferentes (ou via pg_catalog)
+# produzam o mesmo token e não gerem type_changed fantasma.
+_PG_ALIASES: list[tuple[str, str]] = [
+    ("character varying", "varchar"),
+    ("character", "char"),
+    ("decimal", "numeric"),  # alias exato no catálogo do PostgreSQL; deve vir antes de "numeric"
+    ("int8", "bigint"),
+    ("int4", "integer"),
+    ("int2", "smallint"),
+    ("float8", "double precision"),
+    ("float4", "real"),
+    ("bool", "boolean"),
+    ("timestamp without time zone", "timestamp"),
+    ("timestamp with time zone", "timestamptz"),
+    ("time without time zone", "time"),
+    ("time with time zone", "timetz"),
+]
+
+
+def _canonicalize_type(type_str: str) -> str:
+    """Mapeia aliases do catálogo do PostgreSQL para o nome canônico.
+
+    character varying(N) -> varchar(N); int4 -> integer; etc.
+    Chamado antes de qualquer comparação para evitar falso-positivo de type_changed.
+    """
+    s = type_str.strip().lower()
+    for alias, canonical in _PG_ALIASES:
+        # Substitui o alias preservando parâmetros: "character varying(100)" → "varchar(100)"
+        if s == alias:
+            return canonical
+        if s.startswith(alias + "(") and s.endswith(")"):
+            return canonical + s[len(alias) :]
+    return s
+
+
 def _normalize_type(type_str: str) -> str:
-    # Normaliza a string de tipo para comparação: minúsculas e sem espaços extras.
-    return type_str.strip().lower()
+    # Canonicaliza aliases e normaliza para minúsculas sem espaços extras.
+    return _canonicalize_type(type_str)
 
 
 def _extract_varchar_length(type_str: str) -> int | None:

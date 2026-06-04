@@ -11,6 +11,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <br>
 
+## [0.1.1] (2026-06-03)
+
+Patch release targeting two correctness issues identified in the v0.1.0 design review: phantom `type_changed` events caused by PostgreSQL catalog alias variance, and an ambiguous config format with no deprecation signal.
+
+### Fixed
+
+- **Phantom `type_changed` on equivalent PostgreSQL type aliases.** Reading the same database twice could produce a spurious `type_changed` drift if SQLAlchemy returned different string representations for the same physical type across versions or driver configurations (e.g. `character varying(100)` vs. `VARCHAR(100)`, `int4` vs. `integer`, `timestamp without time zone` vs. `timestamp`, `decimal` vs. `numeric`). `type_compatibility.py` now canonicalizes all known PostgreSQL catalog aliases before comparison, so equivalent representations always resolve to `SAFE`. Notable: bare `decimal` vs. `numeric` (without parameters) previously fell through all rules and returned a false **BREAKING**; this is now fixed. See [`AUDIT.md` — Type compatibility matrix](AUDIT.md) for the full alias table.
+
+- **`DeprecationWarning` for v0.0.2 config format.** Loading a `driftbrake.yml` file that uses the nested keys `tables.ignore` / `columns.ignore` (v0.0.2 format) now emits a `DeprecationWarning` at load time instead of silently accepting the format. The nested format will be removed in v0.2.0. Migration: use `driftbrake.policy.yml` with `ignore_tables` / `ignore_columns` (flat keys). See [`DOCUMENTATION.md` — Policy files](DOCUMENTATION.md) for the migration path.
+
+### Added
+
+- **Settings vs. Policy precedence contract documented.** When both `config_path` and `policy_path` are provided, the two layers now have an explicit, documented contract: Settings (`driftbrake.yml`) filters before comparison; Policy (`driftbrake.policy.yml`) post-processes after comparison. There is no conflict, Settings wins by eliminating changes before the Policy layer sees them. See [`DOCUMENTATION.md` — Policy files](DOCUMENTATION.md).
+
+- **Type alias unit tests.** `test_type_compatibility.py` now covers all known PostgreSQL catalog aliases with two test classes: `TestTypeCanonicalizer` (alias-to-canonical mapping, 18 cases) and `test_equivalent_aliases_produce_no_diff` (11 equivalent-alias pairs that must produce `SAFE` in both directions — idempotency guarantee for round-trip reads). Includes explicit coverage of `decimal` ↔ `numeric` in both bare and parametrized forms.
+
+### Migration notes
+
+No API changes. No contract format changes.
+
+If you load a `driftbrake.yml` with `tables.ignore` / `columns.ignore`, you will now see:
+
+```
+DeprecationWarning: 'driftbrake.yml' uses the v0.0.2 config format (tables.ignore / columns.ignore).
+This format is deprecated and will be removed in v0.2.0.
+Migrate to driftbrake.policy.yml with ignore_tables / ignore_columns.
+```
+
+To suppress the warning during the migration period: `warnings.filterwarnings("ignore", category=DeprecationWarning, module="driftbrake")`. To fix it permanently: move `tables.ignore` → `ignore_tables` and `columns.ignore` → `ignore_columns` into a `driftbrake.policy.yml` file.
+
+---
+
 ## [0.1.0] (2026-05-28)
 
 First public release of the high-level `DriftBrake` facade. The library now ships with an orchestration layer on top of the existing `SchemaGuard` engine — designed to be dropped straight into Python pipelines without writing glue code.
@@ -275,6 +307,7 @@ Initial release published to reserve the `driftbrake` name on PyPI.
 
 ---
 
+[0.1.1]: https://github.com/yurivski/DriftBrake/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yurivski/DriftBrake/releases/tag/v0.1.0
 [0.0.3]: https://github.com/yurivski/DriftBrake/releases/tag/v0.0.3
 [0.0.2]: https://github.com/yurivski/DriftBrake/releases/tag/v0.0.2

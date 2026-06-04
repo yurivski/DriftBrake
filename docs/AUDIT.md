@@ -245,6 +245,23 @@ overrides:
 
 When a column type changes, DriftBrake consults the type compatibility module before deciding severity. The matrix below covers the most common conversions. Conversions not listed default to **BREAKING**.
 
+> **Type canonicalization (v0.1.1):** Before any comparison, DriftBrake normalizes PostgreSQL catalog aliases to their canonical names. This prevents phantom `type_changed` events caused by representation differences between SQLAlchemy versions or driver configurations:
+>
+> | Alias (as PostgreSQL may report) | Canonical (used internally) |
+> |---|---|
+> | `character varying(N)` | `varchar(N)` |
+> | `decimal` / `decimal(p,s)` | `numeric` / `numeric(p,s)` |
+> | `int4` | `integer` |
+> | `int8` | `bigint` |
+> | `int2` | `smallint` |
+> | `float8` | `double precision` |
+> | `float4` | `real` |
+> | `bool` | `boolean` |
+> | `timestamp without time zone` | `timestamp` |
+> | `timestamp with time zone` | `timestamptz` |
+>
+> Two type strings that are different aliases for the same physical type will always produce `SAFE`.
+
 ### Strings
 
 | Conversion | Severity | Reasoning |
@@ -542,6 +559,10 @@ A NOT NULL column added without a default is BREAKING. The same `column_added` c
 ### `possible_rename` + incompatible types = separate drop and add
 
 If a removed column and an added column have BREAKING-incompatible types, the rename heuristic does not fire. The result is a `column_removed` (BREAKING) + a `nullable_column_added` (SAFE) or `column_added` (WARNING/BREAKING), depending on the added column's properties. This reflects a true semantic replacement, not a rename.
+
+### Deprecated `driftbrake.yml` format (v0.1.1)
+
+Loading `driftbrake.yml` files that use the nested keys `tables.ignore` / `columns.ignore` (v0.0.2 format) now emits a `DeprecationWarning` at runtime. This format will be removed in v0.2.0. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`. The two formats are applied at different pipeline stages (Settings pre-comparison; Policy post-comparison) and do not conflict when both are present — see DOCUMENTATION.md § *Policy files* for the precedence contract.
 
 <br>
 
