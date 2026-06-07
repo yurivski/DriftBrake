@@ -3,53 +3,56 @@
 from __future__ import annotations
 
 from driftbrake.classifiers.type_compatibility import classify_type_change
-from driftbrake.models import ChangeType, ColumnSchema, SchemaChange, Severity
+from driftbrake.models import ChangeType, SchemaChange, Severity
 
 
 class ImpactClassifier:
     """
+    Invariante: severity = f(change_type, policy), a severidade é determinada
+    unicamente pelo change_type, sem inspecionar propriedades adicionais do objeto.
+
     - Objetos removidos são sempre BREAKING.
-    - Colunas nullable adicionadas são SAFE.
-    - Colunas NOT NULL adicionadas sem default são BREAKING.
+    - Adições de coluna nullable: SAFE; com default: WARNING; NOT NULL sem default: BREAKING.
+    - Adição de restrição NOT NULL: BREAKING; remoção: WARNING.
+    - Índice removido: WARNING; modificado: BREAKING; adicionado: SAFE.
     - Alterações de tipo são avaliadas pela matriz de compatibilidade de tipos.
     """
 
     def __init__(self, custom_rules: dict | None = None) -> None:
         self.custom_rules = custom_rules or {}
 
+    # Tabelas
     def classify_table_added(self, schema: str, table: str) -> Severity:
         return Severity.SAFE
 
     def classify_table_removed(self, schema: str, table: str) -> Severity:
         return Severity.BREAKING
 
-    def classify_column_added(self, column: ColumnSchema) -> Severity:
-        """
-        - Adicionada nullable: SAFE
-        - Adicionada NOT NULL com default: WARNING
-        - Adicionada NOT NULL sem default: BREAKING
-        """
-        if column.nullable:
-            return Severity.SAFE
-        if column.default is not None:
-            return Severity.WARNING
+    # Colunas adicionadas (granular)
+    def classify_column_added_nullable(self) -> Severity:
+        return Severity.SAFE
+
+    def classify_column_added_with_default(self) -> Severity:
+        return Severity.WARNING
+
+    def classify_column_added_not_null(self) -> Severity:
         return Severity.BREAKING
 
     def classify_column_removed(self, column_name: str) -> Severity:
         return Severity.BREAKING
 
+    # Tipo
     def classify_type_change(self, old_type: str, new_type: str) -> Severity:
         return classify_type_change(old_type, new_type)
 
-    def classify_nullable_change(self, old_nullable: bool, new_nullable: bool) -> Severity:
-        if not old_nullable and new_nullable:
-            # NOT NULL removido -> nullable permitido: WARNING (afrouxamento)
-            return Severity.WARNING
-        if old_nullable and not new_nullable:
-            # nullable removido -> NOT NULL adicionado: BREAKING
-            return Severity.BREAKING
-        return Severity.SAFE
+    # Restrições NOT NULL (granular)
+    def classify_not_null_constraint_added(self) -> Severity:
+        return Severity.BREAKING
 
+    def classify_not_null_constraint_removed(self) -> Severity:
+        return Severity.WARNING
+
+    # Default, PK, UNIQUE, FK, ordinal
     def classify_default_change(self, old_default: object, new_default: object) -> Severity:
         return Severity.WARNING
 
@@ -63,9 +66,7 @@ class ImpactClassifier:
         old_has = bool(old_fk)
         new_has = bool(new_fk)
         if not old_has and new_has:
-            # FK adicionada
             return Severity.WARNING
-        # FK alterada ou removida
         return Severity.BREAKING
 
     def classify_ordinal_position_change(self, old_pos: int, new_pos: int) -> Severity:
@@ -74,6 +75,17 @@ class ImpactClassifier:
     def classify_possible_rename(self, removed_col: str, added_col: str) -> Severity:
         return Severity.WARNING
 
+    # Índices
+    def classify_index_added(self) -> Severity:
+        return Severity.SAFE
+
+    def classify_index_removed(self) -> Severity:
+        return Severity.WARNING
+
+    def classify_index_modified(self) -> Severity:
+        return Severity.BREAKING
+
+    # Builder
     def build_change(
         self,
         change_type: ChangeType,

@@ -33,6 +33,7 @@ from driftbrake.models import (
     ColumnSchema,
     DatabaseSchema,
     DiffResult,
+    IndexSchema,
     SchemaChange,
     Severity,
     TableSchema,
@@ -44,7 +45,7 @@ from driftbrake.readers.json_reader import JsonSchemaReader
 from driftbrake.readers.postgres import PostgresSchemaReader
 from driftbrake.reporters.facade_terminal import FacadeTerminalReporter as TerminalReporter
 
-__version__ = "0.1.1"
+__version__ = "0.2.0"
 
 __all__ = [
     # v0.1.0 facade
@@ -80,6 +81,7 @@ __all__ = [
     "DatabaseSchema",
     "TableSchema",
     "ColumnSchema",
+    "IndexSchema",
     "SchemaChange",
     "DiffResult",
     "Severity",

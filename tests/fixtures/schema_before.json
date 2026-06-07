@@ -73,7 +73,7 @@
               "ordinal_position": 7
             }
           },
-          "indexes": ["customers_email_idx"],
+          "indexes": [{"name": "customers_email_idx", "columns": ["email"], "unique": true, "type": "btree"}],
           "check_constraints": []
         },
         "orders": {

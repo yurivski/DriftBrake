@@ -15,6 +15,7 @@ from driftbrake.models import (
     ChangeType,
     ColumnSchema,
     DatabaseSchema,
+    IndexSchema,
     Severity,
     TableSchema,
 )
@@ -30,13 +31,16 @@ def _make_db(tables: dict[str, TableSchema], schema: str = "public") -> Database
 
 
 def _make_table(
-    name: str, schema: str = "public", columns: dict[str, ColumnSchema] | None = None
+    name: str,
+    schema: str = "public",
+    columns: dict[str, ColumnSchema] | None = None,
+    indexes: list[IndexSchema] | None = None,
 ) -> TableSchema:
     return TableSchema(
         name=name,
         schema=schema,
         columns=columns or {},
-        indexes=[],
+        indexes=indexes or [],
         check_constraints=[],
     )
 
@@ -60,6 +64,22 @@ def _make_col(
         unique=unique,
         foreign_key=foreign_key or [],
         ordinal_position=ordinal_position,
+    )
+
+
+def _make_index(
+    name: str,
+    columns: list[str] | None = None,
+    unique: bool = False,
+    index_type: str = "btree",
+    predicate: str | None = None,
+) -> IndexSchema:
+    return IndexSchema(
+        name=name,
+        columns=columns or [],
+        unique=unique,
+        index_type=index_type,
+        predicate=predicate,
     )
 
 
@@ -106,7 +126,7 @@ class TestColumnAddedNullable:
         changes = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.NULLABLE_COLUMN_ADDED and c.column_name == "new_col"
+            if c.change_type == ChangeType.COLUMN_ADDED_NULLABLE and c.column_name == "new_col"
         ]
         assert len(changes) == 1
         assert changes[0].severity == Severity.SAFE
@@ -130,7 +150,7 @@ class TestColumnAddedNotNullWithoutDefault:
         changes = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.COLUMN_ADDED and c.column_name == "required"
+            if c.change_type == ChangeType.COLUMN_ADDED_NOT_NULL and c.column_name == "required"
         ]
         assert len(changes) == 1
         assert changes[0].severity == Severity.BREAKING
@@ -154,7 +174,7 @@ class TestColumnAddedNotNullWithDefault:
         changes = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.COLUMN_ADDED and c.column_name == "required"
+            if c.change_type == ChangeType.COLUMN_ADDED_WITH_DEFAULT and c.column_name == "required"
         ]
         assert len(changes) == 1
         assert changes[0].severity == Severity.WARNING
@@ -263,7 +283,9 @@ class TestNullableChanged:
             }
         )
         result = comparator.compare(expected, current)
-        changes = [c for c in result.changes if c.change_type == ChangeType.NULLABLE_CHANGED]
+        changes = [
+            c for c in result.changes if c.change_type == ChangeType.NOT_NULL_CONSTRAINT_ADDED
+        ]
         assert len(changes) == 1
         assert changes[0].severity == Severity.BREAKING
 
@@ -289,7 +311,9 @@ class TestNullableChanged:
             }
         )
         result = comparator.compare(expected, current)
-        changes = [c for c in result.changes if c.change_type == ChangeType.NULLABLE_CHANGED]
+        changes = [
+            c for c in result.changes if c.change_type == ChangeType.NOT_NULL_CONSTRAINT_REMOVED
+        ]
         assert len(changes) == 1
         assert changes[0].severity == Severity.WARNING
 
@@ -478,6 +502,85 @@ class TestNoChanges:
         assert result.is_compatible
 
 
+class TestIndexComparison:
+    def test_index_added_is_safe(self):
+        idx = _make_index("idx_email", columns=["email"], unique=True)
+        expected = _make_db({"t": _make_table("t")})
+        current = _make_db({"t": _make_table("t", indexes=[idx])})
+        result = comparator.compare(expected, current)
+        changes = [c for c in result.changes if c.change_type == ChangeType.INDEX_ADDED]
+        assert len(changes) == 1
+        assert changes[0].severity == Severity.SAFE
+        assert changes[0].field_name == "idx_email"
+
+    def test_index_removed_is_warning(self):
+        idx = _make_index("idx_email", columns=["email"], unique=True)
+        expected = _make_db({"t": _make_table("t", indexes=[idx])})
+        current = _make_db({"t": _make_table("t")})
+        result = comparator.compare(expected, current)
+        changes = [c for c in result.changes if c.change_type == ChangeType.INDEX_REMOVED]
+        assert len(changes) == 1
+        assert changes[0].severity == Severity.WARNING
+        assert changes[0].field_name == "idx_email"
+
+    def test_index_modified_columns_is_breaking(self):
+        exp_idx = _make_index("idx_name", columns=["name"])
+        cur_idx = _make_index("idx_name", columns=["name", "email"])
+        expected = _make_db({"t": _make_table("t", indexes=[exp_idx])})
+        current = _make_db({"t": _make_table("t", indexes=[cur_idx])})
+        result = comparator.compare(expected, current)
+        changes = [c for c in result.changes if c.change_type == ChangeType.INDEX_MODIFIED]
+        assert len(changes) == 1
+        assert changes[0].severity == Severity.BREAKING
+
+    def test_index_modified_uniqueness_is_breaking(self):
+        exp_idx = _make_index("idx_email", columns=["email"], unique=False)
+        cur_idx = _make_index("idx_email", columns=["email"], unique=True)
+        expected = _make_db({"t": _make_table("t", indexes=[exp_idx])})
+        current = _make_db({"t": _make_table("t", indexes=[cur_idx])})
+        result = comparator.compare(expected, current)
+        changes = [c for c in result.changes if c.change_type == ChangeType.INDEX_MODIFIED]
+        assert len(changes) == 1
+        assert changes[0].severity == Severity.BREAKING
+
+    def test_index_modified_type_is_breaking(self):
+        exp_idx = _make_index("idx_name", columns=["name"], index_type="btree")
+        cur_idx = _make_index("idx_name", columns=["name"], index_type="hash")
+        expected = _make_db({"t": _make_table("t", indexes=[exp_idx])})
+        current = _make_db({"t": _make_table("t", indexes=[cur_idx])})
+        result = comparator.compare(expected, current)
+        changes = [c for c in result.changes if c.change_type == ChangeType.INDEX_MODIFIED]
+        assert len(changes) == 1
+        assert changes[0].severity == Severity.BREAKING
+
+    def test_identical_indexes_produce_no_changes(self):
+        idx = _make_index("idx_email", columns=["email"], unique=True)
+        expected = _make_db({"t": _make_table("t", indexes=[idx])})
+        current = _make_db({"t": _make_table("t", indexes=[idx])})
+        result = comparator.compare(expected, current)
+        index_changes = [
+            c
+            for c in result.changes
+            if c.change_type
+            in (ChangeType.INDEX_ADDED, ChangeType.INDEX_REMOVED, ChangeType.INDEX_MODIFIED)
+        ]
+        assert index_changes == []
+
+    def test_index_column_order_ignored(self):
+        exp_idx = _make_index("idx_multi", columns=["a", "b"])
+        cur_idx = _make_index("idx_multi", columns=["b", "a"])
+        expected = _make_db({"t": _make_table("t", indexes=[exp_idx])})
+        current = _make_db({"t": _make_table("t", indexes=[cur_idx])})
+        result = comparator.compare(expected, current)
+        index_changes = [
+            c
+            for c in result.changes
+            if c.change_type
+            in (ChangeType.INDEX_ADDED, ChangeType.INDEX_REMOVED, ChangeType.INDEX_MODIFIED)
+        ]
+        assert index_changes == []
+
+
 class TestFixtureFiles:
     # Testes de integração usando os arquivos de fixture JSON.
 
@@ -512,7 +615,7 @@ class TestFixtureFiles:
         col_added_breaking = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.COLUMN_ADDED and c.column_name == "required_col"
+            if c.change_type == ChangeType.COLUMN_ADDED_NOT_NULL and c.column_name == "required_col"
         ]
         assert len(col_added_breaking) == 1
         assert col_added_breaking[0].severity == Severity.BREAKING
@@ -520,7 +623,8 @@ class TestFixtureFiles:
         col_added_warning = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.COLUMN_ADDED and c.column_name == "required_with_default"
+            if c.change_type == ChangeType.COLUMN_ADDED_WITH_DEFAULT
+            and c.column_name == "required_with_default"
         ]
         assert len(col_added_warning) == 1
         assert col_added_warning[0].severity == Severity.WARNING
@@ -532,11 +636,26 @@ class TestFixtureFiles:
         ]
         assert len(name_type_change) == 1
         assert name_type_change[0].severity == Severity.BREAKING
-        # email nullable alterado de True -> False: BREAKING
+        # email nullable alterado de True -> False: BREAKING (NOT NULL adicionado)
         email_nullable = [
             c
             for c in result.changes
-            if c.change_type == ChangeType.NULLABLE_CHANGED and c.column_name == "email"
+            if c.change_type == ChangeType.NOT_NULL_CONSTRAINT_ADDED and c.column_name == "email"
         ]
         assert len(email_nullable) == 1
         assert email_nullable[0].severity == Severity.BREAKING
+        # customers_email_idx removido: WARNING; customers_name_idx adicionado: SAFE
+        idx_removed = [
+            c
+            for c in result.changes
+            if c.change_type == ChangeType.INDEX_REMOVED and c.field_name == "customers_email_idx"
+        ]
+        assert len(idx_removed) == 1
+        assert idx_removed[0].severity == Severity.WARNING
+        idx_added = [
+            c
+            for c in result.changes
+            if c.change_type == ChangeType.INDEX_ADDED and c.field_name == "customers_name_idx"
+        ]
+        assert len(idx_added) == 1
+        assert idx_added[0].severity == Severity.SAFE

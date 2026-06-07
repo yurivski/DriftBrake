@@ -7,7 +7,7 @@ from datetime import datetime
 from typing import Any
 
 from driftbrake.exceptions import SchemaConnectionError, SchemaNotFoundError
-from driftbrake.models import ColumnSchema, DatabaseSchema, TableSchema
+from driftbrake.models import ColumnSchema, DatabaseSchema, IndexSchema, TableSchema
 from driftbrake.readers.base import SchemaReader
 
 
@@ -113,11 +113,29 @@ class PostgresSchemaReader(SchemaReader):
             col_schema = self._extract_column(col, pk_columns, unique_constraints, fk_info, ordinal)
             col_schemas[col_schema.name] = col_schema
 
+        index_schemas: list[IndexSchema] = []
+        for idx in indexes:
+            if not idx.get("name"):
+                continue
+            dialect_opts = idx.get("dialect_options", {})
+            index_type = dialect_opts.get("postgresql_using", "btree")
+            predicate_raw = dialect_opts.get("postgresql_where")
+            predicate = str(predicate_raw) if predicate_raw is not None else None
+            index_schemas.append(
+                IndexSchema(
+                    name=idx["name"],
+                    columns=idx.get("column_names", []),
+                    unique=bool(idx.get("unique", False)),
+                    index_type=index_type,
+                    predicate=predicate,
+                )
+            )
+
         return TableSchema(
             name=table_name,
             schema=schema_name,
             columns=col_schemas,
-            indexes=[idx["name"] for idx in indexes if idx.get("name")],
+            indexes=index_schemas,
             check_constraints=[c["sqltext"] for c in check_constraints],
         )
 

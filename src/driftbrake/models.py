@@ -22,11 +22,20 @@ class ChangeType(str, Enum):
     # Tipos de alterações de schema que podem ser detectadas.
     TABLE_ADDED = "table_added"
     TABLE_REMOVED = "table_removed"
-    COLUMN_ADDED = "column_added"
-    NULLABLE_COLUMN_ADDED = "nullable_column_added"
+
+    # Adição de colunas — granular: cada valor encoda uma direção e severidade única.
+    # Invariante: severity = f(change_type, policy) sem inspecionar propriedades da coluna.
+    COLUMN_ADDED_NULLABLE = "column_added_nullable"  # SAFE
+    COLUMN_ADDED_WITH_DEFAULT = "column_added_with_default"  # WARNING
+    COLUMN_ADDED_NOT_NULL = "column_added_not_null"  # BREAKING
+
     COLUMN_REMOVED = "column_removed"
     TYPE_CHANGED = "type_changed"
-    NULLABLE_CHANGED = "nullable_changed"
+
+    # Mudança de nullable — granular: direção encoda a severidade.
+    NOT_NULL_CONSTRAINT_ADDED = "not_null_constraint_added"  # BREAKING (nullable -> NOT NULL)
+    NOT_NULL_CONSTRAINT_REMOVED = "not_null_constraint_removed"  # WARNING (NOT NULL -> nullable)
+
     DEFAULT_CHANGED = "default_changed"
     PRIMARY_KEY_CHANGED = "primary_key_changed"
     UNIQUE_CHANGED = "unique_changed"
@@ -34,6 +43,11 @@ class ChangeType(str, Enum):
     FOREIGN_KEY_ADDED = "foreign_key_added"
     ORDINAL_POSITION_CHANGED = "ordinal_position_changed"
     POSSIBLE_RENAME = "possible_rename"
+
+    # Índices: visibilidade de drift de definição de índice.
+    INDEX_ADDED = "index_added"  # SAFE
+    INDEX_REMOVED = "index_removed"  # WARNING
+    INDEX_MODIFIED = "index_modified"  # BREAKING
 
 
 @dataclass
@@ -74,18 +88,50 @@ class ColumnSchema:
 
 
 @dataclass
+class IndexSchema:
+    """Representa a definição completa de um índice PostgreSQL."""
+
+    name: str
+    columns: list[str]
+    unique: bool
+    index_type: str = "btree"  # btree | hash | gist | gin | brin | spgist
+    predicate: str | None = None  # cláusula WHERE para índices parciais
+
+    def to_dict(self) -> dict[str, Any]:
+        d: dict[str, Any] = {
+            "name": self.name,
+            "columns": self.columns,
+            "unique": self.unique,
+            "type": self.index_type,
+        }
+        if self.predicate is not None:
+            d["predicate"] = self.predicate
+        return d
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> IndexSchema:
+        return cls(
+            name=data["name"],
+            columns=data.get("columns", []),
+            unique=data.get("unique", False),
+            index_type=data.get("type", "btree"),
+            predicate=data.get("predicate"),
+        )
+
+
+@dataclass
 class TableSchema:
     # Representa o schema de uma única tabela.
     name: str
     schema: str
     columns: dict[str, ColumnSchema] = field(default_factory=dict)
-    indexes: list[str] = field(default_factory=list)
+    indexes: list[IndexSchema] = field(default_factory=list)
     check_constraints: list[str] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         return {
             "columns": {col_name: col.to_dict() for col_name, col in self.columns.items()},
-            "indexes": self.indexes,
+            "indexes": [idx.to_dict() for idx in self.indexes],
             "check_constraints": self.check_constraints,
         }
 
@@ -95,13 +141,26 @@ class TableSchema:
             col_name: ColumnSchema.from_dict(col_name, col_data)
             for col_name, col_data in data.get("columns", {}).items()
         }
+        indexes = _parse_indexes(data.get("indexes", []))
         return cls(
             name=name,
             schema=schema,
             columns=columns,
-            indexes=data.get("indexes", []),
+            indexes=indexes,
             check_constraints=data.get("check_constraints", []),
         )
+
+
+def _parse_indexes(raw: list) -> list[IndexSchema]:
+    """Aceita tanto o formato legado (lista de strings) quanto o novo (lista de dicts)."""
+    result = []
+    for item in raw:
+        if isinstance(item, str):
+            # Formato v0.1.2: apenas o nome, converte com metadados mínimos.
+            result.append(IndexSchema(name=item, columns=[], unique=False))
+        elif isinstance(item, dict):
+            result.append(IndexSchema.from_dict(item))
+    return result
 
 
 @dataclass

@@ -42,16 +42,13 @@ class TestTableClassification:
 
 class TestColumnAddedClassification:
     def test_nullable_column_is_safe(self):
-        col = _col(nullable=True, default=None)
-        assert classifier.classify_column_added(col) == Severity.SAFE
-
-    def test_not_null_no_default_is_breaking(self):
-        col = _col(nullable=False, default=None)
-        assert classifier.classify_column_added(col) == Severity.BREAKING
+        assert classifier.classify_column_added_nullable() == Severity.SAFE
 
     def test_not_null_with_default_is_warning(self):
-        col = _col(nullable=False, default="'something'")
-        assert classifier.classify_column_added(col) == Severity.WARNING
+        assert classifier.classify_column_added_with_default() == Severity.WARNING
+
+    def test_not_null_no_default_is_breaking(self):
+        assert classifier.classify_column_added_not_null() == Severity.BREAKING
 
 
 class TestColumnRemovedClassification:
@@ -59,14 +56,12 @@ class TestColumnRemovedClassification:
         assert classifier.classify_column_removed("any_col") == Severity.BREAKING
 
 
-class TestNullableClassification:
-    def test_not_null_added_is_breaking(self):
-        result = classifier.classify_nullable_change(old_nullable=True, new_nullable=False)
-        assert result == Severity.BREAKING
+class TestNotNullConstraintClassification:
+    def test_not_null_constraint_added_is_breaking(self):
+        assert classifier.classify_not_null_constraint_added() == Severity.BREAKING
 
-    def test_not_null_removed_is_warning(self):
-        result = classifier.classify_nullable_change(old_nullable=False, new_nullable=True)
-        assert result == Severity.WARNING
+    def test_not_null_constraint_removed_is_warning(self):
+        assert classifier.classify_not_null_constraint_removed() == Severity.WARNING
 
 
 class TestDefaultClassification:
@@ -111,3 +106,14 @@ class TestOrdinalPositionClassification:
 class TestPossibleRenameClassification:
     def test_possible_rename_is_warning(self):
         assert classifier.classify_possible_rename("old_col", "new_col") == Severity.WARNING
+
+
+class TestIndexClassification:
+    def test_index_added_is_safe(self):
+        assert classifier.classify_index_added() == Severity.SAFE
+
+    def test_index_removed_is_warning(self):
+        assert classifier.classify_index_removed() == Severity.WARNING
+
+    def test_index_modified_is_breaking(self):
+        assert classifier.classify_index_modified() == Severity.BREAKING

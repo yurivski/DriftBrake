@@ -9,25 +9,22 @@ from driftbrake.models import (
     ColumnSchema,
     DatabaseSchema,
     DiffResult,
+    IndexSchema,
     SchemaChange,
     Severity,
     TableSchema,
 )
 
 
-# Comparador de schema (detecta diferenças entre dois objetos DatabaseSchema)
 class SchemaComparator:
     """
     Detecta:
     Tabelas adicionadas/removidas
-    Colunas adicionadas/removidas
+    Colunas adicionadas (nullable/with_default/not_null) / removidas
     Alterações de tipo
-    Alterações de nullable
-    Alterações de default
-    Alterações de chave primária
-    Alterações de restrição unique
-    Alterações de chave estrangeira
-    Alterações de posição ordinal
+    Adição/remoção de restrição NOT NULL
+    Alterações de default, PK, UNIQUE, FK, posição ordinal
+    Índices adicionados/removidos/modificados (definição completa)
     Possíveis renomeações de colunas (heurística)
     """
 
@@ -46,8 +43,6 @@ class SchemaComparator:
 
         expected: O schema do arquivo de contrato (lock file).
         current: O schema atual do banco de dados.
-        expected_source: Rótulo para a fonte esperada.
-        current_source: Rótulo para a fonte atual.
         """
         changes: list[SchemaChange] = []
 
@@ -60,7 +55,6 @@ class SchemaComparator:
             expected_table_names = set(expected_tables.keys())
             current_table_names = set(current_tables.keys())
 
-            # Detecta tabelas removidas
             for table_name in expected_table_names - current_table_names:
                 changes.append(
                     self.classifier.build_change(
@@ -76,7 +70,6 @@ class SchemaComparator:
                     )
                 )
 
-            # Detecta tabelas adicionadas
             for table_name in current_table_names - expected_table_names:
                 changes.append(
                     self.classifier.build_change(
@@ -92,7 +85,6 @@ class SchemaComparator:
                     )
                 )
 
-            # Compara tabelas existentes
             for table_name in expected_table_names & current_table_names:
                 expected_table = expected_tables[table_name]
                 current_table = current_tables[table_name]
@@ -123,7 +115,6 @@ class SchemaComparator:
         removed_cols = expected_cols - current_cols
         added_cols = current_cols - expected_cols
 
-        # Detecta possíveis renomeações antes de reportar adições/remoções separadamente
         rename_pairs = self._detect_possible_renames(expected, current, removed_cols, added_cols)
         renamed_removed = {pair[0] for pair in rename_pairs}
         renamed_added = {pair[1] for pair in rename_pairs}
@@ -153,7 +144,6 @@ class SchemaComparator:
             change.confidence = confidence
             changes.append(change)
 
-        # Colunas removidas (que não fazem parte de uma renomeação)
         for col_name in removed_cols - renamed_removed:
             changes.append(
                 self.classifier.build_change(
@@ -169,17 +159,13 @@ class SchemaComparator:
                 )
             )
 
-        # Colunas adicionadas (que não fazem parte de uma renomeação)
         for col_name in added_cols - renamed_added:
             col = current.columns[col_name]
+            change_type, severity = self._classify_column_added(col)
             changes.append(
                 self.classifier.build_change(
-                    change_type=(
-                        ChangeType.NULLABLE_COLUMN_ADDED
-                        if col.nullable
-                        else ChangeType.COLUMN_ADDED
-                    ),
-                    severity=self.classifier.classify_column_added(col),
+                    change_type=change_type,
+                    severity=severity,
                     schema_name=schema_name,
                     table_name=table_name,
                     column_name=col_name,
@@ -196,14 +182,29 @@ class SchemaComparator:
                 )
             )
 
-        # Compara colunas em comum
         for col_name in expected_cols & current_cols:
             exp_col = expected.columns[col_name]
             cur_col = current.columns[col_name]
             col_changes = self._compare_columns(schema_name, table_name, col_name, exp_col, cur_col)
             changes.extend(col_changes)
 
+        changes.extend(self._compare_indexes(schema_name, table_name, expected, current))
+
         return changes
+
+    def _classify_column_added(self, col: ColumnSchema) -> tuple[ChangeType, Severity]:
+        """Determina change_type e severity sem branching condicional no lado do caller."""
+        if col.nullable:
+            return (
+                ChangeType.COLUMN_ADDED_NULLABLE,
+                self.classifier.classify_column_added_nullable(),
+            )
+        if col.default is not None:
+            return (
+                ChangeType.COLUMN_ADDED_WITH_DEFAULT,
+                self.classifier.classify_column_added_with_default(),
+            )
+        return ChangeType.COLUMN_ADDED_NOT_NULL, self.classifier.classify_column_added_not_null()
 
     def _describe_column_added(self, col_name: str, col: ColumnSchema) -> str:
         if col.nullable:
@@ -224,7 +225,6 @@ class SchemaComparator:
     ) -> list[SchemaChange]:
         changes: list[SchemaChange] = []
 
-        # Alteração de tipo
         if expected.type != current.type:
             severity = self.classifier.classify_type_change(expected.type, current.type)
             changes.append(
@@ -244,16 +244,20 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de nullable
         if expected.nullable != current.nullable:
-            severity = self.classifier.classify_nullable_change(expected.nullable, current.nullable)
             if current.nullable:
-                desc = f"Column '{col_name}' is now nullable (NOT NULL removed)."
+                # NOT NULL -> nullable: restrição removida
+                change_type = ChangeType.NOT_NULL_CONSTRAINT_REMOVED
+                severity = self.classifier.classify_not_null_constraint_removed()
+                desc = f"Column '{col_name}' is now nullable (NOT NULL constraint removed)."
             else:
-                desc = f"Column '{col_name}' is now NOT NULL (nullable removed)."
+                # nullable -> NOT NULL: restrição adicionada
+                change_type = ChangeType.NOT_NULL_CONSTRAINT_ADDED
+                severity = self.classifier.classify_not_null_constraint_added()
+                desc = f"Column '{col_name}' is now NOT NULL (constraint added)."
             changes.append(
                 self.classifier.build_change(
-                    change_type=ChangeType.NULLABLE_CHANGED,
+                    change_type=change_type,
                     severity=severity,
                     schema_name=schema_name,
                     table_name=table_name,
@@ -265,7 +269,6 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de default
         if expected.default != current.default:
             severity = self.classifier.classify_default_change(expected.default, current.default)
             changes.append(
@@ -285,7 +288,6 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de chave primária
         if expected.primary_key != current.primary_key:
             severity = self.classifier.classify_primary_key_change(
                 expected.primary_key, current.primary_key
@@ -304,7 +306,6 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de restrição unique
         if expected.unique != current.unique:
             severity = self.classifier.classify_unique_change(expected.unique, current.unique)
             changes.append(
@@ -321,7 +322,6 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de chave estrangeira
         old_fk_repr = [str(fk) for fk in expected.foreign_key]
         new_fk_repr = [str(fk) for fk in current.foreign_key]
         if old_fk_repr != new_fk_repr:
@@ -347,7 +347,6 @@ class SchemaComparator:
                 )
             )
 
-        # Alteração de posição ordinal
         if expected.ordinal_position != current.ordinal_position and (
             expected.ordinal_position != 0 and current.ordinal_position != 0
         ):
@@ -373,6 +372,103 @@ class SchemaComparator:
 
         return changes
 
+    # Comparação de índices
+
+    def _compare_indexes(
+        self,
+        schema_name: str,
+        table_name: str,
+        expected: TableSchema,
+        current: TableSchema,
+    ) -> list[SchemaChange]:
+        changes: list[SchemaChange] = []
+
+        exp_by_name = {idx.name: idx for idx in expected.indexes}
+        cur_by_name = {idx.name: idx for idx in current.indexes}
+
+        for name in set(exp_by_name) - set(cur_by_name):
+            idx = exp_by_name[name]
+            changes.append(
+                self.classifier.build_change(
+                    change_type=ChangeType.INDEX_REMOVED,
+                    severity=self.classifier.classify_index_removed(),
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=None,
+                    field_name=name,
+                    old_value=self._index_label(idx),
+                    new_value=None,
+                    description=f"Index '{name}' on '{table_name}' was removed.",
+                    suggestion=(
+                        "Removing an index can silently degrade query performance. "
+                        "Verify no critical queries relied on this index."
+                    ),
+                )
+            )
+
+        for name in set(cur_by_name) - set(exp_by_name):
+            idx = cur_by_name[name]
+            changes.append(
+                self.classifier.build_change(
+                    change_type=ChangeType.INDEX_ADDED,
+                    severity=self.classifier.classify_index_added(),
+                    schema_name=schema_name,
+                    table_name=table_name,
+                    column_name=None,
+                    field_name=name,
+                    old_value=None,
+                    new_value=self._index_label(idx),
+                    description=f"Index '{name}' on '{table_name}' was added.",
+                )
+            )
+
+        for name in set(exp_by_name) & set(cur_by_name):
+            exp_idx = exp_by_name[name]
+            cur_idx = cur_by_name[name]
+            if not self._indexes_equal(exp_idx, cur_idx):
+                changes.append(
+                    self.classifier.build_change(
+                        change_type=ChangeType.INDEX_MODIFIED,
+                        severity=self.classifier.classify_index_modified(),
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_name=None,
+                        field_name=name,
+                        old_value=self._index_label(exp_idx),
+                        new_value=self._index_label(cur_idx),
+                        description=(
+                            f"Index '{name}' on '{table_name}' definition changed "
+                            f"(columns, type, uniqueness, or predicate)."
+                        ),
+                        suggestion=(
+                            "Index definition changes can silently alter query plans. "
+                            "Verify affected queries after this migration."
+                        ),
+                    )
+                )
+
+        return changes
+
+    @staticmethod
+    def _indexes_equal(a: IndexSchema, b: IndexSchema) -> bool:
+        return (
+            sorted(a.columns) == sorted(b.columns)
+            and a.unique == b.unique
+            and a.index_type == b.index_type
+            and a.predicate == b.predicate
+        )
+
+    @staticmethod
+    def _index_label(idx: IndexSchema) -> str:
+        parts = [f"({', '.join(idx.columns) or '?'})", f"type={idx.index_type}"]
+        if idx.unique:
+            parts.append("UNIQUE")
+        if idx.predicate:
+            parts.append(f"WHERE {idx.predicate}")
+        return " ".join(parts)
+
+    # Heurística de rename
+
     def _detect_possible_renames(
         self,
         expected: TableSchema,
@@ -382,7 +478,6 @@ class SchemaComparator:
     ) -> list[tuple[str, str, str]]:
         """
         Detecta heuristicamente possíveis renomeações de colunas.
-        Regras de confiança:
         high = nome similar + mesmo tipo + posição próxima (≤ 2)
         medium = mesmo tipo + posição próxima (≤ 2)
         low = apenas tipo compatível
@@ -415,7 +510,6 @@ class SchemaComparator:
                 else:
                     confidence = "low"
 
-                # Prioriza o melhor candidato encontrado
                 if best_match is None or self._confidence_rank(confidence) > self._confidence_rank(
                     best_confidence
                 ):
@@ -429,14 +523,11 @@ class SchemaComparator:
 
     @staticmethod
     def _confidence_rank(confidence: str) -> int:
-        # Converte nível de confiança para valor numérico para comparação.
         return {"low": 0, "medium": 1, "high": 2}.get(confidence, 0)
 
     @staticmethod
     def _names_are_similar(a: str, b: str) -> bool:
-        # Verifica se dois nomes de colunas são semanticamente próximos.
         a_lower, b_lower = a.lower(), b.lower()
-        # Prefixo ou sufixo comum de pelo menos 3 caracteres
         min_len = 3
         prefix_len = min(len(a_lower), len(b_lower))
         for length in range(prefix_len, min_len - 1, -1):
@@ -444,7 +535,6 @@ class SchemaComparator:
                 return True
         if len(a_lower) >= min_len and a_lower[-min_len:] == b_lower[-min_len:]:
             return True
-        # Um nome contém o outro
         if a_lower in b_lower or b_lower in a_lower:
             return True
         return False

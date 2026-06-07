@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "driftbrake"
-version = "0.1.1"
+version = "0.2.0"
 description = "Detect, classify, and block schema drift in PostgreSQL before your pipelines break"
 readme = "README.md"
 requires-python = ">=3.10"

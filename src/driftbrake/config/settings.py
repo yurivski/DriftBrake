@@ -7,7 +7,6 @@ e limiares de falha.
 
 from __future__ import annotations
 
-import warnings
 from pathlib import Path
 from typing import Any
 
@@ -115,25 +114,16 @@ class Settings:
         column_cfg = raw.get("columns", {})
         columns_ignore = column_cfg.get("ignore", {}) if isinstance(column_cfg, dict) else {}
 
-        # Detecta formato v0.0.2 (tables.ignore / columns.ignore aninhados).
-        # O formato v0.1.0 usa driftbrake.policy.yml com ignore_tables / ignore_columns planos.
-        if isinstance(table_cfg, dict) and "ignore" in table_cfg:
-            warnings.warn(
-                f"'{path}' uses the v0.0.2 config format (tables.ignore / columns.ignore). "
-                "This format is deprecated and will be removed in v0.2.0. "
+        # O formato v0.0.2 (tables.ignore / columns.ignore aninhados) foi removido em v0.2.0.
+        # Use driftbrake.policy.yml com ignore_tables / ignore_columns.
+        if (isinstance(table_cfg, dict) and "ignore" in table_cfg) or (
+            isinstance(column_cfg, dict) and "ignore" in column_cfg
+        ):
+            raise ConfigurationError(
+                f"'{path}' uses the removed v0.0.2 config format "
+                "(tables.ignore / columns.ignore). "
                 "Migrate to driftbrake.policy.yml with ignore_tables / ignore_columns. "
-                "See DOCUMENTATION.md § 'Policy files' for details.",
-                DeprecationWarning,
-                stacklevel=4,
-            )
-        elif isinstance(column_cfg, dict) and "ignore" in column_cfg:
-            warnings.warn(
-                f"'{path}' uses the v0.0.2 config format (tables.ignore / columns.ignore). "
-                "This format is deprecated and will be removed in v0.2.0. "
-                "Migrate to driftbrake.policy.yml with ignore_tables / ignore_columns. "
-                "See DOCUMENTATION.md § 'Policy files' for details.",
-                DeprecationWarning,
-                stacklevel=4,
+                "See DOCUMENTATION.md § 'Policy files' for migration details."
             )
 
         rules = raw.get("rules", {})

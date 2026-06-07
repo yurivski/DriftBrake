@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from driftbrake.exceptions import SchemaContractNotFoundError
-from driftbrake.models import ColumnSchema, DatabaseSchema, TableSchema
+from driftbrake.models import ColumnSchema, DatabaseSchema, TableSchema, _parse_indexes
 from driftbrake.readers.base import SchemaReader
 
 
@@ -73,10 +73,11 @@ class JsonSchemaReader(SchemaReader):
         for col_name, col_data in raw_columns.items():
             columns[col_name] = ColumnSchema.from_dict(col_name, col_data)
 
+        indexes = _parse_indexes(table_data.get("indexes", []))
         return TableSchema(
             name=table_name,
             schema=schema_name,
             columns=columns,
-            indexes=table_data.get("indexes", []),
+            indexes=indexes,
             check_constraints=table_data.get("check_constraints", []),
         )
