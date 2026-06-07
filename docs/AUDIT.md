@@ -17,6 +17,7 @@ This document is the **independent reference for every classification decision**
 - [Complete change-type reference table](#complete-change-type-reference-table)
 - [Table-level changes](#table-level-changes)
 - [Column-level changes](#column-level-changes)
+- [Index-level changes](#index-level-changes)
 - [Type compatibility matrix](#type-compatibility-matrix)
 - [The `possible_rename` heuristic](#the-possible_rename-heuristic)
 - [How overrides interact with classification](#how-overrides-interact-with-classification)
@@ -48,11 +49,13 @@ The table below lists every `ChangeType` value that DriftBrake can emit, its def
 |---|---|---|---|
 | `table_added` | **SAFE** | `table_added` | New tables are invisible to existing consumers. |
 | `table_removed` | **BREAKING** | `table_removed` | All consumers that query this table crash immediately. |
-| `column_added` | **BREAKING** | `column_added` | A NOT NULL column without a default breaks existing INSERTs. A NOT NULL column with a default is WARNING — but both share the same `change_type` (see note below). |
-| `nullable_column_added` | **SAFE** | `nullable_column_added` | Nullable additions are invisible to existing consumers; existing INSERTs and SELECTs continue to work. |
+| `column_added_nullable` | **SAFE** | `column_added_nullable` | Nullable additions are invisible to existing consumers; existing INSERTs and SELECTs continue to work. |
+| `column_added_with_default` | **WARNING** | `column_added_with_default` | NOT NULL column with default: inserts still work, but new constraint may surprise application code. |
+| `column_added_not_null` | **BREAKING** | `column_added_not_null` | NOT NULL column without default: existing INSERTs that omit this column fail with `NotNullViolation`. |
 | `column_removed` | **BREAKING** | `column_removed` | Every SELECT, WHERE, and code path referencing this column breaks. |
 | `type_changed` | **see matrix** | `type_changed` | Severity depends on widening, narrowing, or semantic shift; consult the type compatibility matrix. |
-| `nullable_changed` | **BREAKING or WARNING** | `nullable_changed` | Adding NOT NULL = BREAKING; removing NOT NULL = WARNING. Both directions share one `change_type` (see note below). |
+| `not_null_constraint_added` | **BREAKING** | `not_null_constraint_added` | Existing rows with NULL fail validation. Existing inserts that omit this column now fail. |
+| `not_null_constraint_removed` | **WARNING** | `not_null_constraint_removed` | Column now accepts NULL; code that assumed non-null may propagate NULLs silently. |
 | `default_changed` | **WARNING** | `default_changed` | Silent behavioral change: inserts that omit this column now receive a different value. |
 | `primary_key_changed` | **BREAKING** | `primary_key_changed` | Identity semantics shift; FK references may break; joins on PK columns may produce wrong results. |
 | `unique_changed` | **WARNING** | `unique_changed` | New inserts may fail (constraint added); existing reliance on uniqueness is silently lost (constraint removed). |
@@ -60,12 +63,9 @@ The table below lists every `ChangeType` value that DriftBrake can emit, its def
 | `foreign_key_changed` | **BREAKING** | `foreign_key_changed` | Referenced target shifted; existing joins may break; existing rows may violate referential integrity. |
 | `ordinal_position_changed` | **WARNING** | `ordinal_position_changed` | `SELECT *` order changed; position-based consumers break silently. |
 | `possible_rename` | **WARNING** | `possible_rename` | Heuristic suspicion only; human confirmation required before approving. |
-
-> **Note on `column_added`:** The change type `column_added` represents a NOT NULL column (with or without a default). When a default is present, DriftBrake emits `column_added` with WARNING severity; when there is no default, it emits `column_added` with BREAKING severity. Both share the same `change_type` value and cannot be targeted independently via a policy override — an override of `column_added: SAFE` would apply to both. Use with care.
-
-> **Note on `nullable_column_added`:** This is a **distinct** `change_type` from `column_added`. `nullable_column_added` means the new column allows NULL. `column_added` means the new column is NOT NULL.
-
-> **Note on `nullable_changed`:** Direction matters for severity but the `change_type` value is the same for both directions. An override of `nullable_changed: SAFE` would incorrectly downgrade "NOT NULL added" alongside "NOT NULL removed". Prefer using `ignore_columns` or reviewing this change type manually.
+| `index_added` | **SAFE** | `index_added` | New indexes are transparent to existing consumers; queries continue to work. |
+| `index_removed` | **WARNING** | `index_removed` | Dropping an index can silently degrade query performance; queries keep returning correct results but may be slower. |
+| `index_modified` | **BREAKING** | `index_modified` | Index definition changes (columns, type, uniqueness, predicate) can silently alter query plans. |
 
 <br>
 
@@ -100,7 +100,7 @@ overrides:
 
 ## Column-level changes
 
-### `nullable_column_added` — SAFE
+### `column_added_nullable` — SAFE
 
 **When it happens:** A new nullable column appears in the live database that was not in the contract.
 
@@ -110,27 +110,40 @@ overrides:
 
 ```yaml
 overrides:
-  nullable_column_added: BREAKING  # Strict audit: every schema expansion requires sign-off
+  column_added_nullable: BREAKING  # Strict audit: every schema expansion requires sign-off
 ```
 
-This is one of the most common overrides in high-compliance environments. Note that this override key targets ONLY nullable additions, it does not affect `column_added` (NOT NULL).
+This is one of the most common overrides in high-compliance environments. This key targets ONLY nullable additions and does not affect `column_added_with_default` or `column_added_not_null`.
 
 ---
 
-### `column_added` — BREAKING (no default) or WARNING (with default)
+### `column_added_with_default` — WARNING
 
-**When it happens:** A new NOT NULL column appears in the live database.
+**When it happens:** A new NOT NULL column with a default value appears in the live database.
 
-- **Without default:** Existing `INSERT` statements that don't include this column fail with `NotNullViolation`. Every writer to this table must be updated before the migration can be applied safely.
-- **With default:** Inserts still work because the database fills the default. The severity is WARNING because the default behavior may surprise application code that assumed inserts failing when this field was missing.
+**Why WARNING:** Existing `INSERT` statements that don't include this column still succeed because the database fills the default. The severity is WARNING (not SAFE) because the default behavior may surprise application code that assumed inserts failing when this field was missing, and the new constraint is a behavioral change worth reviewing.
 
-**Why BREAKING / WARNING:** Both are stricter than SAFE because the NOT NULL constraint imposes a new obligation on writers. The difference is whether the database can satisfy that obligation automatically (default present) or not.
-
-**How to adjust:** An override of `column_added` applies to both sub-cases because they share the same `change_type` value.
+**How to adjust:**
 
 ```yaml
 overrides:
-  column_added: WARNING  # Downgrade "no default" case — only if all writers have been updated
+  column_added_with_default: BREAKING  # Treat any NOT NULL addition as blocking
+  column_added_with_default: SAFE      # Only if the default covers all cases and consumers are already aware
+```
+
+---
+
+### `column_added_not_null` — BREAKING
+
+**When it happens:** A new NOT NULL column without a default value appears in the live database.
+
+**Why BREAKING:** Existing `INSERT` statements that don't include this column fail with `NotNullViolation`. Every writer to this table must be updated before the migration can be applied safely. There is no automatic recovery.
+
+**How to adjust:**
+
+```yaml
+overrides:
+  column_added_not_null: WARNING  # Only if all writers have already been updated to provide this field
 ```
 
 ---
@@ -162,18 +175,33 @@ This is a coarse override because `type_changed` covers every type pair. Prefer 
 
 ---
 
-### `nullable_changed` — BREAKING (NOT NULL added) or WARNING (NOT NULL removed)
+### `not_null_constraint_added` — BREAKING
 
-**When it happens:**
+**When it happens:** A column that was nullable in the contract is now NOT NULL in the live database.
 
-- **NOT NULL added:** A column that was nullable in the contract is now NOT NULL in the live database.
-- **NOT NULL removed:** A column that was NOT NULL in the contract is now nullable in the live database.
+**Why BREAKING:** Existing rows with NULL fail validation at the database level. Inserts that previously succeeded without providing this field now fail. Even if the migration backfills existing NULLs, all writers must be updated.
 
-**Why BREAKING (adding NOT NULL):** Existing rows with NULL fail validation at the database level. Inserts that previously succeeded without providing this field now fail. Even if the migration backfills existing NULLs, all writers must be updated.
+**How to adjust:**
 
-**Why WARNING (removing NOT NULL):** Existing code continues reading the column without error. But the code now implicitly assumes the field is always non-null — if new code paths start inserting NULLs, previously safe logic fails silently (NULL propagating into arithmetic, comparisons, formatted strings).
+```yaml
+overrides:
+  not_null_constraint_added: WARNING  # Only if existing data has been backfilled and all writers updated
+```
 
-**Edge case:** Both directions share the same `change_type` value `nullable_changed`. An override cannot target them independently.
+---
+
+### `not_null_constraint_removed` — WARNING
+
+**When it happens:** A column that was NOT NULL in the contract is now nullable in the live database.
+
+**Why WARNING:** Existing code continues reading the column without error. But the code now implicitly assumes the field is always non-null — if new code paths start inserting NULLs, previously safe logic fails silently (NULL propagating into arithmetic, comparisons, formatted strings).
+
+**How to adjust:**
+
+```yaml
+overrides:
+  not_null_constraint_removed: SAFE  # Only if consumers have been audited for null-handling
+```
 
 ---
 
@@ -238,6 +266,55 @@ overrides:
 **When it happens:** A column's position (ordinal) within the table changed relative to the contract.
 
 **Why WARNING:** `SELECT *` callers receive columns in a different order. Modern code that maps columns by name is unaffected. Legacy code that reads result sets by position (index 0, index 1, etc.) breaks silently. WARNING rather than BREAKING because the failure mode is position-based access, which is rare in contemporary codebases but common enough to flag.
+
+<br>
+
+## Index-level changes
+
+### `index_added` — SAFE
+
+**When it happens:** A new index appears in the live database on a table already tracked by the contract.
+
+**Why SAFE:** Indexes are a performance detail, invisible to consumers at the query result level. Adding an index does not change what data is stored or returned. Existing queries continue working correctly.
+
+**How to adjust:**
+
+```yaml
+overrides:
+  index_added: WARNING  # Require sign-off for every index addition in high-compliance environments
+```
+
+---
+
+### `index_removed` — WARNING
+
+**When it happens:** An index that existed in the contract no longer exists in the live database.
+
+**Why WARNING:** Dropping an index does not affect query correctness — results remain the same — but performance can degrade silently. Queries that relied on the index for fast lookups may now perform full table scans. DriftBrake includes a suggestion in the change description: "Verify no critical queries relied on this index."
+
+**How to adjust:**
+
+```yaml
+overrides:
+  index_removed: BREAKING  # Treat every index drop as requiring explicit approval
+```
+
+---
+
+### `index_modified` — BREAKING
+
+**When it happens:** An index with the same name exists in both the contract and the live database, but its definition changed — different columns, different uniqueness, different index type, or different partial predicate.
+
+**Why BREAKING:** Index definition changes can silently alter query plans. A query that used a covering index may now require a different access path. A unique index made non-unique removes a consistency guarantee that code may depend on. A partial index (WHERE clause) change means different rows are indexed than before.
+
+Note: DriftBrake compares columns in sorted order, so column order within an index does not trigger `index_modified`. Only the set of columns, uniqueness flag, index type, and predicate are compared.
+
+**How to adjust:**
+
+```yaml
+overrides:
+  index_modified: WARNING  # Downgrade if query plan changes are acceptable in your environment
+```
 
 <br>
 
@@ -345,7 +422,7 @@ The heuristic fires when all three conditions hold:
 2. A column was added to the same table.
 3. The types are compatible per the type matrix (the conversion would be SAFE or WARNING — **never BREAKING**).
 
-When this fires, DriftBrake emits a single `possible_rename` change instead of one `column_removed` (BREAKING) + one `column_added` or `nullable_column_added` (SAFE) change.
+When this fires, DriftBrake emits a single `possible_rename` change instead of one `column_removed` (BREAKING) + one column-added change (`column_added_nullable`, `column_added_with_default`, or `column_added_not_null`).
 
 **Only one rename pair per removed column.** When multiple added columns match a removed column, DriftBrake selects the best match and emits a single `possible_rename` for that pair. The other candidates remain as independent additions.
 
@@ -354,7 +431,7 @@ When this fires, DriftBrake emits a single `possible_rename` change instead of o
 If the type of the removed column and the type of the added column are BREAKING-incompatible per the type matrix, the heuristic does **not** fire. Instead, DriftBrake emits:
 
 - A `column_removed` change (BREAKING) for the removed column.
-- A `nullable_column_added` (SAFE) or `column_added` (WARNING/BREAKING) change for the added column, based on its properties.
+- A column-added change for the added column (`column_added_nullable` SAFE, `column_added_with_default` WARNING, or `column_added_not_null` BREAKING), based on its properties.
 
 This is the correct behavior because an incompatible type change is not a rename, it's a semantic replacement.
 
@@ -419,16 +496,18 @@ def apply_policy(result, policy: Policy):
                 description=f"{change.description} [overridden by policy: {new_severity.value}]")
 ```
 
-The override key in YAML **must match `change_type.value` exactly** (snake_case). The complete set of valid keys is: `table_added`, `table_removed`, `column_added`, `nullable_column_added`, `column_removed`, `type_changed`, `nullable_changed`, `default_changed`, `primary_key_changed`, `unique_changed`, `foreign_key_changed`, `foreign_key_added`, `ordinal_position_changed`, `possible_rename`.
+The override key in YAML **must match `change_type.value` exactly** (snake_case). The complete set of valid keys is: `table_added`, `table_removed`, `column_added_nullable`, `column_added_with_default`, `column_added_not_null`, `column_removed`, `type_changed`, `not_null_constraint_added`, `not_null_constraint_removed`, `default_changed`, `primary_key_changed`, `unique_changed`, `foreign_key_changed`, `foreign_key_added`, `ordinal_position_changed`, `possible_rename`, `index_added`, `index_removed`, `index_modified`.
 
 ### Override examples
 
 ```yaml
 overrides:
-  nullable_column_added: BREAKING   # Require sign-off for every schema expansion
+  column_added_nullable: BREAKING   # Require sign-off for every nullable addition
+  column_added_with_default: BREAKING  # Treat NOT NULL+default additions as blocking
   ordinal_position_changed: SAFE    # Suppress positional change warnings in your environment
   default_changed: BREAKING         # Treat silent behavioral changes as blocking
   possible_rename: BREAKING         # Force explicit approval of every rename suspicion
+  index_removed: BREAKING           # Treat index drops as blocking
 ```
 
 ### Ignore lists are absolute
@@ -548,21 +627,19 @@ If DriftBrake tries to write `schema.lock.json` to a read-only filesystem (CI sa
 
 If the database can't be connected to, DriftBrake raises `SchemaConnectionError` (exit code 3) with the underlying driver error. Exit code 3 covers both "server not running" and "authentication failed" — the message distinguishes the two.
 
-### Ambiguous `nullable_changed` direction
-
-`nullable_changed` covers both "NOT NULL added" (BREAKING) and "NOT NULL removed" (WARNING) under the same `change_type` value. A policy override cannot target one direction independently. If you need to treat "NOT NULL removed" as SAFE, use `ignore_columns` to suppress the specific column, not `nullable_changed: SAFE` (which would also downgrade the BREAKING direction).
-
-### `column_added` severity depends on column properties, not just change type
-
-A NOT NULL column added without a default is BREAKING. The same `column_added` change type with a default present is WARNING. A policy override of `column_added: WARNING` would downgrade the no-default case. Only use this if every writer to the affected table has already been updated to provide the field.
-
 ### `possible_rename` + incompatible types = separate drop and add
 
-If a removed column and an added column have BREAKING-incompatible types, the rename heuristic does not fire. The result is a `column_removed` (BREAKING) + a `nullable_column_added` (SAFE) or `column_added` (WARNING/BREAKING), depending on the added column's properties. This reflects a true semantic replacement, not a rename.
+If a removed column and an added column have BREAKING-incompatible types, the rename heuristic does not fire. The result is a `column_removed` (BREAKING) + a column-added change (`column_added_nullable` SAFE, `column_added_with_default` WARNING, or `column_added_not_null` BREAKING), depending on the added column's properties. This reflects a true semantic replacement, not a rename.
 
-### Deprecated `driftbrake.yml` format (v0.1.1)
+### Removed `driftbrake.yml` format (v0.2.0)
 
-Loading `driftbrake.yml` files that use the nested keys `tables.ignore` / `columns.ignore` (v0.0.2 format) now emits a `DeprecationWarning` at runtime. This format will be removed in v0.2.0. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`. The two formats are applied at different pipeline stages (Settings pre-comparison; Policy post-comparison) and do not conflict when both are present — see DOCUMENTATION.md § *Policy files* for the precedence contract.
+Loading `driftbrake.yml` files that use the nested keys `tables.ignore` / `columns.ignore` (v0.0.2 format) now raises `ConfigurationError` immediately. This format was deprecated with a `DeprecationWarning` in v0.1.1 and removed in v0.2.0. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`.
+
+### `index_modified` vs separate `index_removed` + `index_added`
+
+When an index exists in both before and after but its definition changed (different columns, uniqueness, type, or predicate), DriftBrake emits a single `index_modified` (BREAKING) instead of `index_removed` + `index_added`. The name is the matching key. If the same name doesn't exist in both sides, it's detected as independent removal + addition.
+
+Note: DriftBrake compares index columns in sorted order — index column order is not tracked as a change. Only the set of columns matters.
 
 <br>
 
@@ -581,19 +658,20 @@ Misconfigured policies (e.g. `nullable_column_added: SAFE` when it already defau
 ### Overriding severity via YAML
 
 ```yaml
-# driftbrake.yaml or policy section
-policy:
-  overrides:
-    nullable_column_added: BREAKING   # Stricter: require sign-off for all additions
-    ordinal_position_changed: SAFE    # Looser: ignore positional changes in your environment
-    possible_rename: BREAKING         # Escalate: treat every rename suspicion as blocking
-  ignore_tables:
-    - alembic_version
-  ignore_columns:
-    - users.internal_notes
+# driftbrake.policy.yml
+overrides:
+  column_added_nullable: BREAKING   # Stricter: require sign-off for all additions
+  column_added_not_null: WARNING    # Looser: allow NOT NULL without default after writer update
+  ordinal_position_changed: SAFE    # Suppress positional change warnings in your environment
+  possible_rename: BREAKING         # Escalate: treat every rename suspicion as blocking
+  index_removed: BREAKING           # Escalate: treat index drops as blocking
+ignore_tables:
+  - alembic_version
+ignore_columns:
+  - users.internal_notes
 ```
 
-The override key must be the exact snake_case `change_type.value`. Case sensitivity matters — `NULLABLE_COLUMN_ADDED` will not match.
+The override key must be the exact snake_case `change_type.value`. Case sensitivity matters — `COLUMN_ADDED_NULLABLE` will not match.
 
 ### Overriding severity via Python API
 
@@ -602,7 +680,7 @@ from driftbrake.models import Policy
 from driftbrake.policy import apply_policy
 
 policy = Policy(
-    overrides={"nullable_column_added": "BREAKING"},
+    overrides={"column_added_nullable": "BREAKING"},
     ignore_tables=["alembic_version"],
     ignore_columns=["users.updated_at"],
 )

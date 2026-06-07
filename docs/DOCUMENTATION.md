@@ -215,7 +215,7 @@ columns:
 Pass the file to the CLI with `--config driftbrake.yml`, or to `SchemaGuard` with `config_path="driftbrake.yml"`.
 
 > [!WARNING]
-> **`driftbrake.yml` (v0.0.2 format) is deprecated as of v0.1.1.** The nested keys `tables.ignore` / `columns.ignore` will emit a `DeprecationWarning` at load time and will be removed in v0.2.0. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`. See the [Policy files](#policy-files) section below.
+> **`driftbrake.yml` (v0.0.2 format) nested keys `tables.ignore` / `columns.ignore` were removed in v0.2.0.** Loading a file with these keys now raises `ConfigurationError` immediately. Migrate to `driftbrake.policy.yml` with the flat keys `ignore_tables` / `ignore_columns`. See the [Policy files](#policy-files) section below.
 
 > For the new policy file format used by the `DriftBrake` facade (`driftbrake.policy.yml` with `overrides`, `ignore_tables`, `ignore_columns`), see the [Policy files](#policy-files) section below.
 
@@ -996,7 +996,7 @@ DriftBrake(
 |---|---|---|
 | `database_url` | required | Full PostgreSQL connection URL |
 | `contract_path` | `"schema.lock.json"` | Path to the contract file |
-| `config_path` | `None` | Path to `driftbrake.yml` (v0.0.2-style config, **deprecated** — emits `DeprecationWarning`) |
+| `config_path` | `None` | Path to `driftbrake.yml` (v0.0.2-style config, **removed in v0.2.0** — raises `ConfigurationError` if `tables.ignore` / `columns.ignore` keys are present) |
 | `policy_path` | `None` | Path to `driftbrake.policy.yml` (v0.1.0-style policy, preferred) |
 | `auto_init` | `True` | If `True`, creates the contract automatically on first run |
 | `interactive` | `"auto"` | See [interactive parameter](#the-interactive-parameter) section |
@@ -1080,10 +1080,12 @@ The `DriftBrake` facade supports a policy file format with three sections:
 ```yaml
 # driftbrake.policy.yml
 overrides:
-  nullable_column_added: WARNING   # default is SAFE; tighten it
-  default_changed: BREAKING        # default is WARNING; make it strict
-  possible_rename: BREAKING        # treat all renames as BREAKING
-  ordinal_position_changed: SAFE   # relax ordinal position changes
+  column_added_nullable: WARNING # default is SAFE; tighten it
+  column_added_with_default: BREAKING # default is WARNING; make it strict
+  default_changed: BREAKING # default is WARNING; make it strict
+  possible_rename: BREAKING # treat all renames as BREAKING
+  ordinal_position_changed: SAFE # relax ordinal position changes
+  index_removed: BREAKING # treat index drops as breaking
 
 ignore_tables:
   - alembic_version
@@ -1121,12 +1123,16 @@ The override key is the `change_type.value` string (lowercase, underscore-separa
 
 ```yaml
 overrides:
-  nullable_column_added: BREAKING    # key = "nullable_column_added"
-  default_changed: BREAKING          # key = "default_changed"
-  possible_rename: BREAKING          # key = "possible_rename"
-  ordinal_position_changed: SAFE     # key = "ordinal_position_changed"
-  column_added: WARNING              # key = "column_added"
-  column_removed: WARNING            # key = "column_removed"
+  column_added_nullable: WARNING # key = "column_added_nullable"
+  column_added_with_default: BREAKING # key = "column_added_with_default"
+  column_added_not_null: WARNING # key = "column_added_not_null"
+  not_null_constraint_added: WARNING # key = "not_null_constraint_added"
+  default_changed: BREAKING # key = "default_changed"
+  possible_rename: BREAKING # key = "possible_rename"
+  ordinal_position_changed: SAFE # key = "ordinal_position_changed"
+  column_removed: WARNING # key = "column_removed"
+  index_removed: BREAKING # key = "index_removed"
+  index_modified: WARNING # key = "index_modified"
 ```
 
 > [!NOTE]
@@ -1144,7 +1150,7 @@ When both `config_path` and `policy_path` are provided, they operate at **differ
 A table listed in both `tables.ignore` (Settings) and `ignore_tables` (Policy) is simply never compared — the Policy filter is a no-op for it. There is no conflict; the Settings layer wins by eliminating the change before the Policy layer sees it.
 
 > [!WARNING]
-> `config_path` (`driftbrake.yml`) is **deprecated as of v0.1.1** and will be removed in v0.2.0. Prefer `policy_path` (`driftbrake.policy.yml`) for all new integrations.
+> `config_path` (`driftbrake.yml`) with `tables.ignore` / `columns.ignore` was **removed in v0.2.0**. Using these keys now raises `ConfigurationError`. Prefer `policy_path` (`driftbrake.policy.yml`) for all new integrations.
 
 For the full classification rules that overrides modify, see [`AUDIT.md`](AUDIT.md).
 
@@ -1449,11 +1455,13 @@ The tool detects the following categories of change in every comparison:
 |---|---|---|
 | `table_added` | A new table appeared in the database | SAFE |
 | `table_removed` | A table that existed is gone from the database | BREAKING |
-| `column_added` | A new NOT NULL column was added to an existing table | WARNING (with default) / BREAKING (without default) |
-| `nullable_column_added` | A new nullable column was added to an existing table | SAFE |
+| `column_added_nullable` | A new nullable column was added to an existing table | SAFE |
+| `column_added_with_default` | A new NOT NULL column with a default value was added | WARNING |
+| `column_added_not_null` | A new NOT NULL column without a default was added | BREAKING |
 | `column_removed` | A column was removed from an existing table | BREAKING |
 | `type_changed` | A column's data type changed (e.g. `INTEGER` → `TEXT`) | Varies — see type matrix |
-| `nullable_changed` | The column stopped accepting NULL or started accepting it | BREAKING (NOT NULL added) / WARNING (NOT NULL removed) |
+| `not_null_constraint_added` | The column stopped accepting NULL (NOT NULL constraint added) | BREAKING |
+| `not_null_constraint_removed` | The column started accepting NULL (NOT NULL constraint removed) | WARNING |
 | `default_changed` | The column's default value changed or was removed | WARNING |
 | `primary_key_changed` | A column gained or lost its primary key | BREAKING |
 | `unique_changed` | A `UNIQUE` constraint was added or removed | WARNING |
@@ -1461,16 +1469,20 @@ The tool detects the following categories of change in every comparison:
 | `foreign_key_added` | A foreign key was created where there was none | WARNING |
 | `ordinal_position_changed` | The column's position in the table changed | WARNING |
 | `possible_rename` | A column was removed and a similar one was added in the same table. The tool only flags this as a suspicion of rename, never as a confirmation. | WARNING (always) |
+| `index_added` | A new index was created on the table | SAFE |
+| `index_removed` | An existing index was dropped | WARNING |
+| `index_modified` | An index changed columns, uniqueness, type, or predicate | BREAKING |
 
 > [!IMPORTANT]
 > For the full classification logic — *why* each change is SAFE, WARNING, or BREAKING — see [`AUDIT.md`](AUDIT.md). It's the independent reference for every classification decision.
 
 > [!NOTE]
-> `nullable_column_added` and `column_added` are **two distinct change types** with separate override keys. Adding a nullable column is always SAFE — existing queries keep working, the column defaults to NULL. Adding a NOT NULL column requires a default to be WARNING; without a default, it's BREAKING because existing inserts that don't supply the column will fail. Policy overrides can target each independently:
+> Column additions use **three distinct change types** with separate override keys. Adding a nullable column is always SAFE. Adding a NOT NULL column with a default is WARNING (existing rows get the default). Adding a NOT NULL column without a default is BREAKING (existing inserts that don't supply the column fail). Policy overrides can target each independently:
 > ```yaml
 > overrides:
->   nullable_column_added: WARNING   # tighten nullable additions
->   column_added: BREAKING           # make all NOT NULL additions strict
+>   column_added_nullable: WARNING        # tighten nullable additions
+>   column_added_with_default: BREAKING   # make NOT NULL+default strict
+>   column_added_not_null: WARNING        # relax NOT NULL without default
 > ```
 
 <br>
@@ -1510,7 +1522,7 @@ The tool detects the following categories of change in every comparison:
 **Intentional but surprising behavior:**
 
 - DROP `customer_email` (text) + ADD `email` (text): types are compatible → **one** `possible_rename` WARNING.
-- DROP `customer_email` (text) + ADD `amount` (integer): types are incompatible (BREAKING conversion) → **two** separate changes: one BREAKING (`column_removed`) + one BREAKING or SAFE depending on nullability (`column_added` / `nullable_column_added`).
+- DROP `customer_email` (text) + ADD `amount` (integer): types are incompatible (BREAKING conversion) → **two** separate changes: one BREAKING (`column_removed`) + one result from the column-added classification (`column_added_nullable`, `column_added_with_default`, or `column_added_not_null`).
 
 **Important rules:**
 
@@ -1579,24 +1591,29 @@ The tables below summarize the default severity for each change type. For the fu
 
 ### Columns
 
-| Drifts | Default severity |
-|---|---|
-| Column removed | BREAKING |
-| Column added — nullable (`nullable_column_added`) | SAFE |
-| Column added — NOT NULL without default (`column_added`) | BREAKING |
-| Column added — NOT NULL with default (`column_added`) | WARNING |
-| NOT NULL added | BREAKING |
-| NOT NULL removed | WARNING |
-| Default changed | WARNING |
-| Primary key changed | BREAKING |
-| Unique constraint changed | WARNING |
-| Foreign key added | WARNING |
-| Foreign key changed | BREAKING |
-| Ordinal position changed | WARNING |
-| Possible rename detected | WARNING |
+| Drifts | Change type | Default severity |
+|---|---|---|
+| Column removed | `column_removed` | BREAKING |
+| Column added — nullable | `column_added_nullable` | SAFE |
+| Column added — NOT NULL with default | `column_added_with_default` | WARNING |
+| Column added — NOT NULL without default | `column_added_not_null` | BREAKING |
+| NOT NULL constraint added | `not_null_constraint_added` | BREAKING |
+| NOT NULL constraint removed | `not_null_constraint_removed` | WARNING |
+| Default changed | `default_changed` | WARNING |
+| Primary key changed | `primary_key_changed` | BREAKING |
+| Unique constraint changed | `unique_changed` | WARNING |
+| Foreign key added | `foreign_key_added` | WARNING |
+| Foreign key changed | `foreign_key_changed` | BREAKING |
+| Ordinal position changed | `ordinal_position_changed` | WARNING |
+| Possible rename detected | `possible_rename` | WARNING |
 
-> [!NOTE]
-> `column_added` covers two sub-cases: NOT NULL **with** default (WARNING) and NOT NULL **without** default (BREAKING). The distinction is made at comparison time based on the column's `default` field in the schema. Both use the same `change_type` value (`"column_added"`) and share a single override key. `nullable_column_added` is always SAFE and has its own separate override key.
+### Indexes
+
+| Drifts | Change type | Default severity |
+|---|---|---|
+| Index added | `index_added` | SAFE |
+| Index removed | `index_removed` | WARNING |
+| Index modified (columns, type, uniqueness, predicate) | `index_modified` | BREAKING |
 
 ### PostgreSQL types (compatibility matrix excerpt)
 
