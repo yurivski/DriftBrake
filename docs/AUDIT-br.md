@@ -1,262 +1,328 @@
 <div align="center">
 
-# DriftBrake — Auditoria das Classificações
+# DriftBrake — Auditoria de Classificação
 
 </div>
 
-Esse documento é a **referência independente pra toda decisão de classificação** que o DriftBrake toma. Se você tá tentando entender por que a ferramenta marcou uma mudança como BREAKING quando você esperava WARNING, ou precisa defender uma classificação numa revisão de código, é aqui que olha.
+Este documento é a **referência independente para cada decisão de classificação** que o DriftBrake toma. Se você está tentando entender por que a ferramenta marcou uma alteração como BREAKING quando esperava WARNING, ou precisa defender uma classificação em uma revisão de código, aqui é onde você deve procurar.
 
-> **Público:** devs integrando o DriftBrake em pipelines críticos, revisores auditando migrations, e quem tá construindo policies customizadas de severidade.  
-> **Companheiro:** pra docs de uso (CLI, biblioteca, configuração), veja [`DOCUMENTATION-BR.md`](DOCUMENTATION-BR.md).
+> **Público-alvo:** desenvolvedores que integram o DriftBrake em pipelines críticos, revisores auditando migrações, e qualquer pessoa que esteja criando políticas de severidade personalizadas.  
+> **Documento complementar:** para documentação de uso (CLI, biblioteca, configuração), consulte [`DOCUMENTATION.md`](DOCUMENTATION.md).
 
 <br>
 
-## Sumário
+## Conteúdo
 
 - [Classificação](#classificação)
-- [Tabela de referência completa de change_type](#tabela-de-referência-completa-de-change_type)
-- [Mudanças no nível de tabela](#mudanças-no-nível-de-tabela)
-- [Mudanças no nível de coluna](#mudanças-no-nível-de-coluna)
+- [Tabela de referência completa de tipos de alteração](#tabela-de-referência-completa-de-tipos-de-alteração)
+- [Alterações em nível de tabela](#alterações-em-nível-de-tabela)
+- [Alterações em nível de coluna](#alterações-em-nível-de-coluna)
+- [Alterações em nível de índice](#alterações-em-nível-de-índice)
 - [Matriz de compatibilidade de tipos](#matriz-de-compatibilidade-de-tipos)
-- [O heurístico `possible_rename`](#o-heurístico-possible_rename)
-- [Como overrides interagem com a classificação](#como-overrides-interagem-com-a-classificação)
+- [A heurística `possible_rename`](#a-heurística-possible_rename)
+- [Como as substituições interagem com a classificação](#como-as-substituições-interagem-com-a-classificação)
 - [Lógica de decisão: bloquear, perguntar, liberar](#lógica-de-decisão-bloquear-perguntar-liberar)
 - [Formato de saída do reporter](#formato-de-saída-do-reporter)
 - [Cenários mistos](#cenários-mistos)
-- [Casos extremos](#casos-extremos)
+- [Casos de borda](#casos-de-borda)
 - [Uso programático para auditores](#uso-programático-para-auditores)
 
 <br>
 
 ## Classificação
 
-O DriftBrake classifica cada mudança detectada em uma de três severidades. As regras seguem três princípios de forma consistente.
+O DriftBrake classifica cada alteração detectada em uma das três severidades. As regras de decisão seguem três princípios de forma consistente.
 
-**1. O contrato é a fonte da verdade.** Quando o banco em produção difere do contrato, o DriftBrake reporta o banco como "desviou do acordo", não o contrato como "desatualizado". O vocabulário do comparator reflete isso: uma coluna "removida" significa que o banco perdeu uma coluna que o contrato esperava; uma coluna "adicionada" significa que o banco tem uma coluna que o contrato não acordou.
+**1. O contrato é a fonte da verdade.** Quando o banco de dados ativo difere do contrato, o DriftBrake reporta o banco de dados como divergente do acordo, não o contrato como desatualizado. O vocabulário do comparador reflete isso: uma coluna "removida" significa que o banco de dados perdeu uma coluna que o contrato esperava; uma coluna "adicionada" significa que o banco de dados possui uma coluna com a qual o contrato não concordou.
 
-**2. Severidade é sobre impacto no consumidor, não esforço pra arrumar.** Uma mudança é BREAKING quando consumidores downstream que leem o banco segundo o contrato vão receber dado errado ou crashar. É WARNING quando consumidores continuam funcionando mas o comportamento mudou de um jeito que merece revisão humana. É SAFE quando consumidores existentes não são afetados.
+**2. A severidade é sobre o impacto nos consumidores, não sobre o esforço para corrigir.** Uma alteração é BREAKING quando consumidores downstream que leem o banco de dados de acordo com o contrato receberiam dados errados ou travariam. É WARNING quando os consumidores continuam funcionando, mas o comportamento mudou de uma forma que merece revisão humana. É SAFE quando os consumidores existentes não são afetados.
 
-**3. Classificações default são conservadoras.** Quando tá em dúvida entre duas severidades, o DriftBrake escolhe a mais estrita. Exemplos práticos: uma constraint `NOT NULL` removida é WARNING (não SAFE) porque código novo pode ter começado a depender de NULL não aparecer; uma foreign key adicionada é WARNING (não SAFE) porque restrições referenciais podem rejeitar inserts que funcionavam antes.
+**3. As classificações padrão são conservadoras.** Em caso de dúvida entre duas severidades, o DriftBrake escolhe a mais restritiva. Exemplos práticos: uma restrição `NOT NULL` removida é WARNING (não SAFE) porque um novo código pode ter começado a depender de NULL não aparecer; uma chave estrangeira adicionada é WARNING (não SAFE) porque restrições referenciais podem rejeitar inserções que funcionavam antes.
 
 <br>
 
-## Tabela de referência completa de change_type
+## Tabela de referência completa de tipos de alteração
 
-A tabela abaixo lista todo valor de `ChangeType` que o DriftBrake pode emitir, sua severidade default, a chave exata usada para overrides de policy (snake_case, correspondendo a `change_type.value`), e um breve raciocínio.
+A tabela abaixo lista todos os valores de `ChangeType` que o DriftBrake pode emitir, sua severidade padrão, a chave exata usada para substituições de política (snake_case, correspondendo a `change_type.value`), e uma breve justificativa.
 
-| `change_type` | Severidade default | Chave de override (YAML) | Raciocínio |
+| `change_type` | Severidade padrão | Chave de substituição (YAML) | Justificativa |
 |---|---|---|---|
-| `table_added` | **SAFE** | `table_added` | Tabelas novas são invisíveis para consumidores existentes. |
-| `table_removed` | **BREAKING** | `table_removed` | Todo consumidor que faz query nessa tabela quebra imediatamente. |
-| `column_added` | **BREAKING** | `column_added` | Uma coluna NOT NULL sem default quebra INSERTs existentes. Uma coluna NOT NULL com default é WARNING — mas ambos compartilham o mesmo `change_type` (veja nota abaixo). |
-| `nullable_column_added` | **SAFE** | `nullable_column_added` | Adições nullable são invisíveis para consumidores existentes; INSERTs e SELECTs existentes continuam funcionando. |
-| `column_removed` | **BREAKING** | `column_removed` | Todo SELECT, WHERE e caminho de código que referencia essa coluna quebra. |
-| `type_changed` | **veja matriz** | `type_changed` | Severidade depende de ampliação, redução ou mudança semântica; consulte a matriz de compatibilidade de tipos. |
-| `nullable_changed` | **BREAKING ou WARNING** | `nullable_changed` | Adicionar NOT NULL = BREAKING; remover NOT NULL = WARNING. Ambas as direções compartilham um `change_type` (veja nota abaixo). |
-| `default_changed` | **WARNING** | `default_changed` | Mudança comportamental silenciosa: inserts que omitem essa coluna agora recebem um valor diferente. |
-| `primary_key_changed` | **BREAKING** | `primary_key_changed` | Semântica de identidade desloca; referências FK podem quebrar; joins nas colunas PK podem produzir resultados errados. |
-| `unique_changed` | **WARNING** | `unique_changed` | Inserts novos podem falhar (constraint adicionada); dependência existente em unicidade é silenciosamente perdida (constraint removida). |
-| `foreign_key_added` | **WARNING** | `foreign_key_added` | Restrições referenciais novas podem rejeitar inserts que antes passavam. |
-| `foreign_key_changed` | **BREAKING** | `foreign_key_changed` | Alvo referenciado deslocou; joins existentes podem quebrar; linhas existentes podem violar integridade referencial. |
-| `ordinal_position_changed` | **WARNING** | `ordinal_position_changed` | Ordem de `SELECT *` mudou; consumidores baseados em posição quebram silenciosamente. |
+| `table_added` | **SAFE** | `table_added` | Novas tabelas são invisíveis para os consumidores existentes. |
+| `table_removed` | **BREAKING** | `table_removed` | Todos os consumidores que consultam esta tabela travam imediatamente. |
+| `column_added_nullable` | **SAFE** | `column_added_nullable` | Adições anuláveis são invisíveis para os consumidores existentes; INSERTs e SELECTs existentes continuam funcionando. |
+| `column_added_with_default` | **WARNING** | `column_added_with_default` | Coluna NOT NULL com padrão: inserções ainda funcionam, mas a nova restrição pode surpreender o código da aplicação. |
+| `column_added_not_null` | **BREAKING** | `column_added_not_null` | Coluna NOT NULL sem padrão: INSERTs existentes que omitem esta coluna falham com `NotNullViolation`. |
+| `column_removed` | **BREAKING** | `column_removed` | Todo SELECT, WHERE e caminho de código que referencia esta coluna quebra. |
+| `type_changed` | **ver matriz** | `type_changed` | A severidade depende de ampliação, estreitamento ou mudança semântica; consulte a matriz de compatibilidade de tipos. |
+| `not_null_constraint_added` | **BREAKING** | `not_null_constraint_added` | Linhas existentes com NULL falham na validação. Inserções existentes que omitem esta coluna agora falham. |
+| `not_null_constraint_removed` | **WARNING** | `not_null_constraint_removed` | A coluna agora aceita NULL; código que assumia não-nulo pode propagar NULLs silenciosamente. |
+| `default_changed` | **WARNING** | `default_changed` | Mudança comportamental silenciosa: inserções que omitem esta coluna agora recebem um valor diferente. |
+| `primary_key_changed` | **BREAKING** | `primary_key_changed` | A semântica de identidade muda; referências FK podem quebrar; joins em colunas PK podem produzir resultados incorretos. |
+| `unique_changed` | **WARNING** | `unique_changed` | Novas inserções podem falhar (restrição adicionada); a dependência existente de unicidade é perdida silenciosamente (restrição removida). |
+| `foreign_key_added` | **WARNING** | `foreign_key_added` | Novas restrições referenciais podem rejeitar inserções que anteriormente tiveram êxito. |
+| `foreign_key_changed` | **BREAKING** | `foreign_key_changed` | O alvo referenciado mudou; joins existentes podem quebrar; linhas existentes podem violar a integridade referencial. |
+| `ordinal_position_changed` | **WARNING** | `ordinal_position_changed` | A ordem do `SELECT *` mudou; consumidores baseados em posição quebram silenciosamente. |
 | `possible_rename` | **WARNING** | `possible_rename` | Apenas suspeita heurística; confirmação humana necessária antes de aprovar. |
-
-> **Nota sobre `column_added`:** O change type `column_added` representa uma coluna NOT NULL (com ou sem default). Quando um default está presente, o DriftBrake emite `column_added` com severidade WARNING; quando não há default, emite `column_added` com severidade BREAKING. Ambos compartilham o mesmo valor de `change_type` e não podem ser alvejados independentemente via override de policy — um override de `column_added: SAFE` se aplicaria aos dois. Use com cuidado.
-
-> **Nota sobre `nullable_column_added`:** Este é um `change_type` **distinto** de `column_added`. `nullable_column_added` significa que a nova coluna permite NULL. `column_added` significa que a nova coluna é NOT NULL.
-
-> **Nota sobre `nullable_changed`:** A direção importa para a severidade mas o valor de `change_type` é o mesmo para ambas as direções. Um override de `nullable_changed: SAFE` incorretamente rebaixaria "NOT NULL adicionado" junto com "NOT NULL removido". Prefira usar `ignore_columns` ou revisar esse change type manualmente.
+| `index_added` | **SAFE** | `index_added` | Novos índices são transparentes para os consumidores existentes; as consultas continuam funcionando. |
+| `index_removed` | **WARNING** | `index_removed` | Remover um índice pode degradar silenciosamente o desempenho das consultas; as consultas continuam retornando resultados corretos, mas podem ser mais lentas. |
+| `index_modified` | **BREAKING** | `index_modified` | Mudanças na definição do índice (colunas, tipo, unicidade, predicado) podem alterar silenciosamente os planos de consulta. |
 
 <br>
 
-## Mudanças no nível de tabela
+## Alterações em nível de tabela
 
 ### `table_added` — SAFE
 
-**Quando acontece:** O banco em produção contém uma tabela que não está presente no contrato.
+**Quando ocorre:** O banco de dados ativo contém uma tabela que não está presente no contrato.
 
-**Por que SAFE:** Consumidores existentes ignoram tabelas que não conhecem. Tabelas novas são aditivas por definição, nenhum contrato segurado pelos consumidores atuais é violado. Queries, inserts e código de aplicação que funcionavam antes da migration continuam funcionando sem alteração.
+**Por que SAFE:** Os consumidores existentes ignoram tabelas que não conhecem. Novas tabelas são aditivas por definição; nenhum contrato mantido pelos consumidores atuais é violado. Consultas, inserções e código de aplicação que funcionavam antes da migração continuam funcionando sem alterações.
 
 **Como ajustar:**
 
 ```yaml
 overrides:
-  table_added: WARNING  # Exige aprovação humana para toda expansão de schema
+  table_added: WARNING  # Exigir aprovação humana para qualquer expansão de esquema
 ```
 
-**Casos extremos:** Se uma tabela é adicionada sem atualizar o contrato (`init`), execuções subsequentes vão continuar reportando-a como drift SAFE. Atualize o contrato quando a adição for intencional.
+**Casos de borda:** Se uma tabela for adicionada sem migrar o contrato (`init`), execuções subsequentes continuarão reportando-a como drift SAFE. Atualize o contrato quando a adição for intencional.
 
 ---
 
 ### `table_removed` — BREAKING
 
-**Quando acontece:** O contrato referencia uma tabela que não existe mais no banco em produção.
+**Quando ocorre:** O contrato referencia uma tabela que não existe mais no banco de dados ativo.
 
-**Por que BREAKING:** Todo consumidor que faz query nessa tabela quebra imediatamente com `UndefinedTable`. Nenhuma recuperação é possível sem restaurar a tabela ou reescrever todo o código dependente e atualizar o contrato.
+**Por que BREAKING:** Todo consumidor que consulta esta tabela trava imediatamente com `UndefinedTable`. Nenhuma recuperação é possível sem restaurar a tabela ou reescrever todo o código dependente e atualizar o contrato.
 
 **Como ajustar:** Não há rebaixamento seguro para `table_removed`. Se a tabela foi removida intencionalmente, atualize o contrato via `driftbrake init`. Se foi removida por acidente, restaure-a.
 
 <br>
 
-## Mudanças no nível de coluna
+## Alterações em nível de coluna
 
-### Adições
+### `column_added_nullable` — SAFE
 
-#### `nullable_column_added` — SAFE
+**Quando ocorre:** Uma nova coluna anulável aparece no banco de dados ativo que não estava no contrato.
 
-**Quando acontece:** Uma nova coluna nullable aparece no banco em produção que não estava no contrato.
-
-**Por que SAFE:** Statements `INSERT` existentes que listam colunas explicitamente pulam essa coluna e o banco insere NULL. Queries `SELECT *` existentes recebem uma coluna NULL extra que tipicamente ignoram. Nenhum consumidor quebra.
+**Por que SAFE:** Instruções `INSERT` existentes que listam colunas explicitamente ignoram esta coluna e o banco de dados insere NULL. Consultas `SELECT *` existentes recebem uma coluna NULL extra que geralmente ignoram. Nenhum consumidor quebra.
 
 **Como ajustar:**
 
 ```yaml
 overrides:
-  nullable_column_added: BREAKING  # Auditoria estrita: toda expansão de schema exige aprovação
+  column_added_nullable: BREAKING  # Auditoria estrita: toda expansão de esquema requer aprovação
 ```
 
----
-
-#### `column_added` — BREAKING (sem default) ou WARNING (com default)
-
-**Quando acontece:** Uma nova coluna NOT NULL aparece no banco em produção.
-
-- **Sem default:** Statements `INSERT` existentes que não incluem essa coluna falham com `NotNullViolation`. Todo escritor dessa tabela precisa ser atualizado antes que a migration possa ser aplicada com segurança.
-- **Com default:** Inserts continuam funcionando porque o banco preenche o default. A severidade é WARNING porque o comportamento do default pode surpreender código de aplicação que assumia que inserts falhariam quando esse campo estivesse faltando.
-
-**Por que BREAKING / WARNING:** Ambos são mais estritos que SAFE porque a constraint NOT NULL impõe uma nova obrigação sobre os escritores. A diferença é se o banco pode satisfazer essa obrigação automaticamente (default presente) ou não.
-
-**Como ajustar:** Um override de `column_added` aplica-se a ambos os sub-casos porque compartilham o mesmo valor de `change_type`.
-
-```yaml
-overrides:
-  column_added: WARNING  # Rebaixa o caso "sem default" — apenas se todos os escritores já foram atualizados
-```
+Esta é uma das substituições mais comuns em ambientes de alta conformidade. Esta chave visa APENAS adições anuláveis e não afeta `column_added_with_default` ou `column_added_not_null`.
 
 ---
 
-### Remoções
+### `column_added_with_default` — WARNING
 
-#### `column_removed` — BREAKING
+**Quando ocorre:** Uma nova coluna NOT NULL com um valor padrão aparece no banco de dados ativo.
 
-**Quando acontece:** O contrato referencia uma coluna que não existe mais no banco em produção.
-
-**Por que BREAKING:** Todo `SELECT column_name`, todo `WHERE column_name = ...`, todo caminho de código de aplicação que lê ou escreve esse campo quebra. Não há recuperação automática.
-
-**Como ajustar:** Sem rebaixamento seguro. Se a remoção foi intencional, atualize o contrato. Se foi um `possible_rename`, veja essa seção.
-
----
-
-### Mudanças de tipo
-
-#### `type_changed` — veja matriz
-
-**Quando acontece:** O tipo de dado de uma coluna no banco em produção difere do tipo no contrato.
-
-**Por que varia:** Mudanças de tipo vão de ampliação segura (mais valores cabem) a redução com perda (valores existentes podem ser perdidos ou mal interpretados). Veja a [matriz de compatibilidade de tipos](#matriz-de-compatibilidade-de-tipos) para pares específicos.
+**Por que WARNING:** Instruções `INSERT` existentes que não incluem esta coluna ainda têm êxito porque o banco de dados preenche o padrão. A severidade é WARNING (não SAFE) porque o comportamento padrão pode surpreender o código da aplicação que assumia que inserções falhariam quando este campo estivesse ausente, e a nova restrição é uma mudança comportamental que vale revisar.
 
 **Como ajustar:**
 
 ```yaml
 overrides:
-  type_changed: WARNING  # Rebaixa todas as mudanças de tipo, apenas se você verificou que toda conversão é segura
+  column_added_with_default: BREAKING  # Tratar qualquer adição NOT NULL como bloqueante
+  column_added_with_default: SAFE      # Somente se o padrão cobrir todos os casos e os consumidores já estiverem cientes
 ```
 
-Este é um override grosseiro porque `type_changed` cobre todo par de tipos. Prefira revisar casos específicos em vez de rebaixar de forma abrangente.
-
 ---
 
-### Nulabilidade
+### `column_added_not_null` — BREAKING
 
-#### `nullable_changed` — BREAKING (NOT NULL adicionado) ou WARNING (NOT NULL removido)
+**Quando ocorre:** Uma nova coluna NOT NULL sem um valor padrão aparece no banco de dados ativo.
 
-**Quando acontece:**
-
-- **NOT NULL adicionado:** Uma coluna que era nullable no contrato agora é NOT NULL no banco em produção.
-- **NOT NULL removido:** Uma coluna que era NOT NULL no contrato agora é nullable no banco em produção.
-
-**Por que BREAKING (adicionando NOT NULL):** Linhas existentes com NULL falham validação no nível do banco. Inserts que antes passavam sem fornecer esse campo agora falham. Mesmo que a migration preencha NULLs existentes com um default, todos os escritores precisam ser atualizados.
-
-**Por que WARNING (removendo NOT NULL):** Código existente continua lendo a coluna sem erro. Mas o código agora implicitamente assume que o campo é sempre não-nulo, se novos caminhos de código começarem a inserir NULLs, lógica antes segura falha silenciosamente (NULL se propagando em aritmética, comparações, strings formatadas).
-
-**Caso extremo:** Ambas as direções compartilham o mesmo valor de `change_type` `nullable_changed`. Um override não pode alvejá-las independentemente.
-
----
-
-### Defaults
-
-#### `default_changed` — WARNING
-
-**Quando acontece:** O valor default de uma coluna foi adicionado, removido ou alterado no banco em produção em relação ao contrato. Todos os três sub-casos emitem `default_changed` com severidade WARNING.
-
-**Por que WARNING:** O schema não quebra estruturalmente, queries e inserts continuam compilando e rodando. Mas o comportamento muda: inserts que omitem essa coluna agora recebem um valor diferente (ou NULL, ou falham se NOT NULL sem default). Esta é uma mudança comportamental silenciosa que pode produzir dado errado em lógica de negócio sem nenhum erro surgindo.
+**Por que BREAKING:** Instruções `INSERT` existentes que não incluem esta coluna falham com `NotNullViolation`. Todo escritor desta tabela deve ser atualizado antes que a migração possa ser aplicada com segurança. Não há recuperação automática.
 
 **Como ajustar:**
 
 ```yaml
 overrides:
-  default_changed: BREAKING  # Trata mudanças comportamentais silenciosas como bloqueantes
+  column_added_not_null: WARNING  # Somente se todos os escritores já foram atualizados para fornecer este campo
 ```
 
 ---
 
-### Constraints
+### `column_removed` — BREAKING
 
-#### `primary_key_changed` — BREAKING
+**Quando ocorre:** O contrato referencia uma coluna que não existe mais no banco de dados ativo.
 
-**Quando acontece:** As colunas de chave primária de uma tabela mudaram em relação ao contrato.
+**Por que BREAKING:** Todo `SELECT column_name`, todo `WHERE column_name = ...`, todo caminho de código da aplicação que lê ou grava este campo quebra. Não há recuperação automática.
 
-**Por que BREAKING:** Chaves primárias são contratos de identidade. Foreign keys em outras tabelas que referenciam essa PK podem quebrar. Código que assume uma coluna PK específica (para cache, cursores de paginação, deduplicação) pode produzir joins errados ou resultados incorretos. A mudança é sempre BREAKING porque não há troca segura de PK para um sistema em produção com dependências.
-
----
-
-#### `unique_changed` — WARNING
-
-**Quando acontece:** Uma constraint unique foi adicionada ou removida de uma coluna em relação ao contrato.
-
-**Por que WARNING (constraint adicionada):** Dados existentes passaram por validação (a constraint foi criada com sucesso). Mas inserts e updates novos que antes passavam podem agora falhar com erros de chave duplicada.
-
-**Por que WARNING (constraint removida):** Código pode ter dependido da unicidade para estratégias de cache, lógica de deduplicação ou correção garantida de joins. A remoção é silenciosa no nível do schema mas barulhenta no comportamento de aplicação.
+**Como ajustar:** Sem rebaixamento seguro. Se a remoção foi intencional, atualize o contrato. Se foi um `possible_rename`, consulte essa seção.
 
 ---
 
-#### `foreign_key_added` — WARNING
+### `type_changed` — ver matriz
 
-**Quando acontece:** Uma nova constraint de foreign key foi adicionada no banco em produção que não estava no contrato.
+**Quando ocorre:** O tipo de dado de uma coluna no banco de dados ativo difere do tipo no contrato.
 
-**Por que WARNING:** Inserts e updates novos precisam agora satisfazer integridade referencial. Código de aplicação que antes escrevia referências órfãs (linhas sem pai correspondente) agora falha no nível do banco. A mudança não quebra leituras existentes, mas quebra escritas existentes que dependiam da ausência da constraint.
+**Por que varia:** Mudanças de tipo vão desde ampliação segura (mais valores cabem) até estreitamento com perda de dados (valores existentes podem ser perdidos ou interpretados incorretamente). Consulte a [matriz de compatibilidade de tipos](#matriz-de-compatibilidade-de-tipos) para pares específicos.
 
----
+**Como ajustar:**
 
-#### `foreign_key_changed` — BREAKING
+```yaml
+overrides:
+  type_changed: WARNING  # Rebaixar todas as mudanças de tipo — somente se você verificou que cada conversão é segura
+```
 
-**Quando acontece:** A tabela ou coluna referenciada por uma foreign key existente mudou em relação ao contrato.
-
-**Por que BREAKING:** A FK agora aponta para um alvo diferente. Joins existentes podem produzir resultados errados. Linhas existentes podem agora violar integridade referencial se a nova coluna referenciada não contém valores correspondentes.
-
----
-
-#### `foreign_key_changed` também cobre FK removida — BREAKING (não WARNING)
-
-**Por que BREAKING (FK removida):** Remover uma foreign key remove uma garantia de integridade referencial da qual consumidores podem ter dependido. Comportamento de cascade delete, comportamento de ON UPDATE e semântica de join, tudo muda silenciosamente. O código trata isso como BREAKING porque a suposição embutida no contrato é violada.
+Esta é uma substituição genérica porque `type_changed` cobre todos os pares de tipos. Prefira revisar casos específicos em vez de rebaixar de forma geral.
 
 ---
 
-### Estrutural
+### `not_null_constraint_added` — BREAKING
 
-#### `ordinal_position_changed` — WARNING
+**Quando ocorre:** Uma coluna que era anulável no contrato agora é NOT NULL no banco de dados ativo.
 
-**Quando acontece:** A posição (ordinal) de uma coluna dentro da tabela mudou em relação ao contrato.
+**Por que BREAKING:** Linhas existentes com NULL falham na validação no nível do banco de dados. Inserções que anteriormente tiveram êxito sem fornecer este campo agora falham. Mesmo que a migração preencha NULLs existentes, todos os escritores devem ser atualizados.
 
-**Por que WARNING:** Quem chama `SELECT *` recebe colunas em ordem diferente. Código moderno que mapeia colunas por nome não é afetado. Código legacy que lê result sets por posição (índice 0, índice 1, etc.) quebra silenciosamente. WARNING em vez de BREAKING porque o modo de falha é acesso baseado em posição, que é raro em codebases contemporâneos mas comum o suficiente para sinalizar.
+**Como ajustar:**
+
+```yaml
+overrides:
+  not_null_constraint_added: WARNING  # Somente se os dados existentes foram preenchidos e todos os escritores atualizados
+```
+
+---
+
+### `not_null_constraint_removed` — WARNING
+
+**Quando ocorre:** Uma coluna que era NOT NULL no contrato agora é anulável no banco de dados ativo.
+
+**Por que WARNING:** O código existente continua lendo a coluna sem erro. Mas o código agora assume implicitamente que o campo sempre é não-nulo, se novos caminhos de código começarem a inserir NULLs, uma lógica anteriormente segura falha silenciosamente (NULL se propagando em aritmética, comparações, strings formatadas).
+
+**Como ajustar:**
+
+```yaml
+overrides:
+  not_null_constraint_removed: SAFE  # Somente se os consumidores foram auditados para tratamento de nulos
+```
+
+---
+
+### `default_changed` — WARNING
+
+**Quando ocorre:** O valor padrão de uma coluna foi adicionado, removido ou alterado no banco de dados ativo em relação ao contrato. Todos os três subcasos emitem `default_changed` com severidade WARNING.
+
+**Por que WARNING:** O esquema não quebra estruturalmente; consultas e inserções continuam compilando e executando. Mas o comportamento muda: inserções que omitem esta coluna agora recebem um valor diferente (ou NULL, ou falham se NOT NULL sem padrão). Esta é uma mudança comportamental silenciosa que pode produzir dados errados na lógica de negócios sem que nenhum erro apareça.
+
+**Como ajustar:**
+
+```yaml
+overrides:
+  default_changed: BREAKING  # Tratar mudanças comportamentais silenciosas como bloqueantes
+```
+
+---
+
+### `primary_key_changed` — BREAKING
+
+**Quando ocorre:** As coluna(s) de chave primária de uma tabela mudaram em relação ao contrato.
+
+**Por que BREAKING:** Chaves primárias são contratos de identidade. Chaves estrangeiras em outras tabelas que referenciam esta PK podem quebrar. Código que assume uma coluna PK específica (para cache, cursores de paginação, deduplicação) pode produzir joins errados ou resultados incorretos. A alteração é sempre BREAKING porque não há troca segura de PK para um sistema ativo com dependências.
+
+---
+
+### `unique_changed` — WARNING
+
+**Quando ocorre:** Uma restrição de unicidade foi adicionada ou removida de uma coluna em relação ao contrato.
+
+**Por que WARNING (restrição adicionada):** Os dados existentes passaram na validação (a restrição foi criada com êxito). Mas novas inserções e atualizações que anteriormente tiveram êxito podem agora falhar com erros de chave duplicada.
+
+**Por que WARNING (restrição removida):** O código pode ter dependido da unicidade para estratégias de cache, lógica de deduplicação ou correção garantida de join. A remoção é silenciosa no nível do esquema, mas ruidosa no comportamento da aplicação.
+
+---
+
+### `foreign_key_added` — WARNING
+
+**Quando ocorre:** Uma nova restrição de chave estrangeira foi adicionada no banco de dados ativo que não estava no contrato.
+
+**Por que WARNING:** Novas inserções e atualizações agora devem satisfazer a integridade referencial. O código da aplicação que anteriormente escrevia referências órfãs (linhas sem pai correspondente) agora falha no nível do banco de dados. A alteração não quebra leituras existentes, mas quebra escritas existentes que dependiam da ausência de restrição.
+
+
+---
+
+### `foreign_key_changed` — BREAKING
+
+**Quando ocorre:** A tabela ou coluna referenciada de uma restrição de chave estrangeira existente mudou em relação ao contrato.
+
+**Por que BREAKING:** A FK agora aponta para um alvo diferente. Joins existentes podem produzir resultados errados. Linhas existentes podem agora violar a integridade referencial se a nova coluna referenciada não contiver valores correspondentes.
+
+---
+
+### `foreign_key_changed` também cobre FK removida — BREAKING (não WARNING)
+
+**Por que BREAKING (FK removida):** Remover uma chave estrangeira remove uma garantia de integridade referencial da qual os consumidores podem ter dependido. O comportamento de exclusão em cascata, o comportamento de ON UPDATE e a semântica de join mudam silenciosamente. O código trata isso como BREAKING porque a suposição incorporada no contrato é violada.
+
+---
+
+### `ordinal_position_changed` — WARNING
+
+**Quando ocorre:** A posição (ordinal) de uma coluna dentro da tabela mudou em relação ao contrato.
+
+**Por que WARNING:** Chamadores de `SELECT *` recebem colunas em uma ordem diferente. Código moderno que mapeia colunas por nome não é afetado. Código legado que lê conjuntos de resultados por posição (índice 0, índice 1, etc.) quebra silenciosamente. WARNING em vez de BREAKING porque o modo de falha é acesso baseado em posição, que é raro em bases de código contemporâneas, mas comum o suficiente para sinalizar.
+
+<br>
+
+## Alterações em nível de índice
+
+### `index_added` — SAFE
+
+**Quando ocorre:** Um novo índice aparece no banco de dados ativo em uma tabela já rastreada pelo contrato.
+
+**Por que SAFE:** Índices são um detalhe de desempenho, invisíveis para os consumidores no nível de resultado da consulta. Adicionar um índice não altera quais dados são armazenados ou retornados. As consultas existentes continuam funcionando corretamente.
+
+**Como ajustar:**
+
+```yaml
+overrides:
+  index_added: WARNING  # Exigir aprovação para cada adição de índice em ambientes de alta conformidade
+```
+
+---
+
+### `index_removed` — WARNING
+
+**Quando ocorre:** Um índice que existia no contrato não existe mais no banco de dados ativo.
+
+**Por que WARNING:** Remover um índice não afeta a correção das consultas, os resultados permanecem os mesmos, mas o desempenho pode degradar silenciosamente. Consultas que dependiam do índice para buscas rápidas agora podem realizar varreduras completas da tabela. O DriftBrake inclui uma sugestão na descrição da alteração: "Verifique se nenhuma consulta crítica dependia deste índice."
+
+**Como ajustar:**
+
+```yaml
+overrides:
+  index_removed: BREAKING  # Tratar toda remoção de índice como exigindo aprovação explícita
+```
+
+---
+
+### `index_modified` — BREAKING
+
+**Quando ocorre:** Um índice com o mesmo nome existe tanto no contrato quanto no banco de dados ativo, mas sua definição mudou — colunas diferentes, unicidade diferente, tipo de índice diferente ou predicado parcial diferente.
+
+**Por que BREAKING:** Mudanças na definição do índice podem alterar silenciosamente os planos de consulta. Uma consulta que usava um índice de cobertura pode agora exigir um caminho de acesso diferente. Um índice único tornado não-único remove uma garantia de consistência da qual o código pode depender. Uma mudança no índice parcial (cláusula WHERE) significa que linhas diferentes são indexadas do que antes.
+
+Observação: O DriftBrake compara colunas em ordem classificada, portanto a ordem das colunas dentro de um índice não aciona `index_modified`. Apenas o conjunto de colunas, o sinalizador de unicidade, o tipo de índice e o predicado são comparados.
+
+**Como ajustar:**
+
+```yaml
+overrides:
+  index_modified: WARNING  # Rebaixar se mudanças no plano de consulta forem aceitáveis em seu ambiente
+```
 
 <br>
 
 ## Matriz de compatibilidade de tipos
 
-Quando o tipo de uma coluna muda, o DriftBrake consulta o módulo de compatibilidade de tipos antes de decidir a severidade. A matriz abaixo cobre as conversões mais comuns. Conversões não listadas defaultam para **BREAKING**.
+Quando o tipo de uma coluna muda, o DriftBrake consulta o módulo de compatibilidade de tipos antes de decidir a severidade. A matriz abaixo cobre as conversões mais comuns. Conversões não listadas têm como padrão **BREAKING**.
 
-> **Canonicalização de tipos (v0.1.1):** Antes de qualquer comparação, o DriftBrake normaliza os aliases do catálogo do PostgreSQL para seus nomes canônicos. Isso evita eventos `type_changed` fantasmas causados por diferenças de representação entre versões do SQLAlchemy ou configurações de driver:
+> **Canonicalização de tipos (v0.1.1):** Antes de qualquer comparação, o DriftBrake normaliza aliases do catálogo PostgreSQL para seus nomes canônicos. Isso evita eventos fantasmas de `type_changed` causados por diferenças de representação entre versões do SQLAlchemy ou configurações de driver:
 >
 > | Alias (como o PostgreSQL pode reportar) | Canônico (usado internamente) |
 > |---|---|
@@ -271,158 +337,158 @@ Quando o tipo de uma coluna muda, o DriftBrake consulta o módulo de compatibili
 > | `timestamp without time zone` | `timestamp` |
 > | `timestamp with time zone` | `timestamptz` |
 >
-> Dois strings de tipo que são aliases diferentes para o mesmo tipo físico sempre produzirão `SAFE`.
+> Duas strings de tipo que são aliases diferentes para o mesmo tipo físico sempre produzirão `SAFE`.
 
 ### Strings
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
-| `varchar(50)` → `varchar(100)` | **SAFE** | Ampliação — todo valor que cabia antes ainda cabe. |
-| `varchar(100)` → `varchar(50)` | **BREAKING** | Redução — valores com mais de 50 caracteres são truncados ou rejeitados. |
-| `varchar(n)` → `text` | **SAFE** | `text` não tem limite de tamanho; todo valor `varchar` cabe sem mudança. |
+| `varchar(50)` → `varchar(100)` | **SAFE** | Ampliação: todo valor que cabia antes ainda cabe. |
+| `varchar(100)` → `varchar(50)` | **BREAKING** | Estreitamento — valores com mais de 50 caracteres são truncados ou rejeitados. |
+| `varchar(n)` → `text` | **SAFE** | `text` não tem limite de comprimento; todo valor `varchar` cabe sem alteração. |
 | `text` → `varchar(n)` | **BREAKING** | Qualquer valor maior que `n` agora é inválido. |
 
 
 ### Inteiros
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
 | `smallint` → `integer` | **SAFE** | Ampliação. |
-| `integer` → `bigint` | **WARNING** | Ampliação pro banco, mas código cliente lendo num tipo de largura fixa (int 32 bits) pode estourar em valores grandes. |
-| `bigint` → `integer` | **BREAKING** | Redução — valores acima de 2^31-1 estouram. |
-| `integer` → `smallint` | **BREAKING** | Redução — valores acima de 2^15-1 estouram. |
+| `integer` → `bigint` | **WARNING** | Ampliação para o banco de dados, mas o código cliente que lê em um inteiro de 32 bits de largura fixa pode transbordar em valores grandes. |
+| `bigint` → `integer` | **BREAKING** | Estreitamento: valores acima de 2^31-1 transbordam. |
+| `integer` → `smallint` | **BREAKING** | Estreitamento: valores acima de 2^15-1 transbordam. |
 
-**O código retorna WARNING para esses pares específicos:**
+**O código retorna WARNING para estes pares específicos:**
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
-| `integer` → `text` | **WARNING** | O código retorna WARNING: o valor numérico é representável como texto sem perda, mas a semântica aritmética é perdida. |
-| `bigint` → `text` | **WARNING** | O código retorna WARNING. |
+| `integer` → `text` | **WARNING** | Código retorna WARNING: valor numérico é representável sem perda como texto, mas semânticas aritméticas são perdidas. |
+| `bigint` → `text` | **WARNING** | Código retorna WARNING. |
 
 
 ### Decimais
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
 | `numeric(10,2)` → `numeric(12,2)` | **SAFE** | Ampliação de precisão, escala inalterada. |
-| `numeric(12,2)` → `numeric(10,2)` | **BREAKING** | Redução de precisão — valores acima de 10 dígitos significativos estouram. |
-| `numeric(10,4)` → `numeric(10,2)` | **BREAKING** | Escala reduzida — valores com mais de 2 casas decimais perdem precisão. |
+| `numeric(12,2)` → `numeric(10,2)` | **BREAKING** | Estreitamento de precisão — valores acima de 10 dígitos significativos transbordam. |
+| `numeric(10,4)` → `numeric(10,2)` | **BREAKING** | Escala estreitada — valores com mais de 2 casas decimais perdem precisão. |
 
-A lógica do código é: `if new_prec < old_prec or new_scale != old_scale: return BREAKING`. Isso significa que **qualquer mudança de escala**, incluindo ampliação de escala, é BREAKING. Consumidores que parseiam a escala de metadados de coluna podem se comportar incorretamente quando a escala muda em qualquer direção.
+A lógica no código é a seguinte: `if new_prec < old_prec or new_scale != old_scale: return BREAKING`. Isso significa que **qualquer modificação na escala**, seja aumentando ou diminuindo, é tratada como uma mudança de quebra. Consumidores downstream que dependem de analisar a escala da coluna a partir de metadados podem se comportar de maneira inesperada ou incorreta se a escala mudar em qualquer direção.
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
 | `real` → `double precision` | **SAFE** | Ampliação. |
-| `double precision` → `real` | **BREAKING** | O código retorna BREAKING: redução de precisão com potencial perda de valor, não apenas perda de acurácia. |
+| `double precision` → `real` | **BREAKING** | Código retorna BREAKING: estreitamento de precisão com potencial perda de valor, não apenas perda de acurácia. |
 
-### Datas e horários
+### Datas e horas
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
-| `date` → `timestamp` | **WARNING** | Semântica de data preservada (meia-noite), mas consumidores podem agora processar um componente de hora inesperado. |
-| `timestamp` → `date` | **BREAKING** | Perda do componente de hora; linhas com horários diferentes de meia-noite perdem informação silenciosamente. |
-| `timestamp` → `timestamptz` | **WARNING** | Interpretação de fuso horário desloca; consumidores precisam concordar em UTC vs. local. |
-| `timestamptz` → `timestamp` | **WARNING** | **O código retorna WARNING.** A informação de fuso horário é tecnicamente descartada no nível do banco, mas para muitos consumidores em ambientes de fuso único essa conversão é tolerável, revisão humana é necessária em vez de bloqueio automático. |
+| `date` → `timestamp` | **WARNING** | Semântica de data preservada (meia-noite), mas os consumidores agora podem processar um componente de tempo inesperado. |
+| `timestamp` → `date` | **BREAKING** | Perda do componente de tempo; linhas com horários diferentes de meia-noite perdem informações silenciosamente. |
+| `timestamp` → `timestamptz` | **WARNING** | A interpretação do fuso horário muda; os consumidores devem concordar sobre UTC vs. local. |
+| `timestamptz` → `timestamp` | **WARNING** | **Código retorna WARNING.** As informações de fuso horário são tecnicamente descartadas no nível do banco de dados, mas para muitos consumidores em um ambiente de fuso horário único, esta conversão é tolerável; revisão humana é necessária em vez de bloqueio automático. |
 
-### Genéricas
+### Genérico
 
-| Conversão | Severidade | Raciocínio |
+| Conversão | Severidade | Justificativa |
 |---|---|---|
-| `numeric` → `text` | **BREAKING** | Semântica numérica perdida. Aritmética, comparações, queries de range — tudo quebra. |
-| `text` → `numeric` | **BREAKING** | Parsing necessário; linhas com conteúdo não-numérico falham. |
-| `json` → `jsonb` | **SAFE** | `jsonb` é superset estrito de casos de uso de `json`. |
-| `jsonb` → `json` | **WARNING** | Perde indexabilidade; queries que dependiam de operadores jsonb quebram. |
+| `numeric` → `text` | **BREAKING** | Semânticas numéricas perdidas. Aritmética, comparações e consultas de intervalo quebram. |
+| `text` → `numeric` | **BREAKING** | Análise necessária; linhas com conteúdo não numérico falham. |
+| `json` → `jsonb` | **SAFE** | `jsonb` é um superconjunto estrito dos casos de uso de `json`. |
+| `jsonb` → `json` | **WARNING** | Perde indexabilidade; consultas que dependem de operadores jsonb quebram. |
 
 ### O que a matriz NÃO cobre
 
-Se o DriftBrake encontra um par de tipos não presente em `_COMPAT_RULES` (domínios customizados, tipos de extensão como PostGIS, enums, tipos compostos), ele defaulta pra **BREAKING** para ser conservador. Use um override de policy se seu contexto exige outro comportamento:
+Se o DriftBrake encontrar um par de tipos não presente em `_COMPAT_RULES` (domínios personalizados, tipos de extensão como PostGIS, enums, tipos compostos), o padrão é **BREAKING** para ser conservador. Use uma substituição de política se seu contexto exigir o contrário:
 
 ```yaml
 overrides:
-  type_changed: WARNING  # Use apenas após verificar manualmente que cada par de tipos desconhecido é seguro
+  type_changed: WARNING  # Use somente após verificar manualmente que cada par de tipo desconhecido é seguro
 ```
 
 <br>
 
-## O heurístico `possible_rename`
+## A heurística `possible_rename`
 
-Quando uma coluna é removida de uma tabela e outra coluna é adicionada na mesma tabela com tipo compatível, o DriftBrake trata isso como **suspeita de rename** em vez de duas mudanças independentes.
+Quando uma coluna é removida de uma tabela e outra coluna é adicionada à mesma tabela com um tipo compatível, o DriftBrake trata isso como uma **suspeita de renomeação** em vez de duas alterações independentes.
 
 ### Como a suspeita é detectada
 
-O heurístico dispara quando todas as três condições são verdadeiras:
+A heurística é acionada quando todas as três condições se aplicam:
 
 1. Uma coluna foi removida de uma tabela.
-2. Uma coluna foi adicionada na mesma tabela.
-3. Os tipos são compatíveis segundo a matriz de tipos (a conversão seria SAFE ou WARNING — **nunca BREAKING**).
+2. Uma coluna foi adicionada à mesma tabela.
+3. Os tipos são compatíveis de acordo com a matriz de tipos (a conversão seria SAFE ou WARNING — **nunca BREAKING**).
 
-Quando isso dispara, o DriftBrake emite uma única mudança `possible_rename` em vez de uma `column_removed` (BREAKING) + uma `column_added` ou `nullable_column_added` (SAFE).
+Quando isso ocorre, o DriftBrake emite uma única alteração `possible_rename` em vez de uma `column_removed` (BREAKING) + uma alteração de coluna adicionada (`column_added_nullable`, `column_added_with_default` ou `column_added_not_null`).
 
-**Apenas um par de rename por coluna removida.** Quando múltiplas colunas adicionadas correspondem a uma coluna removida, o DriftBrake seleciona o melhor match e emite um único `possible_rename` para esse par. Os outros candidatos permanecem como adições independentes.
+**Apenas um par de renomeação por coluna removida.** Quando várias colunas adicionadas correspondem a uma coluna removida, o DriftBrake seleciona a melhor correspondência e emite um único `possible_rename` para esse par. Os outros candidatos permanecem como adições independentes.
 
-### Quando tipos incompatíveis impedem a detecção de rename
+### Quando tipos incompatíveis impedem a detecção de renomeação
 
-Se o tipo da coluna removida e o tipo da coluna adicionada são BREAKING-incompatíveis segundo a matriz de tipos, o heurístico **não dispara**. Em vez disso, o DriftBrake emite:
+Se o tipo da coluna removida e o tipo da coluna adicionada são incompatíveis-BREAKING de acordo com a matriz de tipos, a heurística **não** é acionada. Em vez disso, o DriftBrake emite:
 
-- Uma mudança `column_removed` (BREAKING) para a coluna removida.
-- Uma mudança `nullable_column_added` (SAFE) ou `column_added` (WARNING/BREAKING) para a coluna adicionada, baseado nas suas propriedades.
+- Uma alteração `column_removed` (BREAKING) para a coluna removida.
+- Uma alteração de coluna adicionada para a coluna adicionada (`column_added_nullable` SAFE, `column_added_with_default` WARNING ou `column_added_not_null` BREAKING), com base em suas propriedades.
 
-Esse é o comportamento correto porque uma mudança de tipo incompatível não é um rename, é uma substituição semântica.
+Este é o comportamento correto porque uma mudança de tipo incompatível não é uma renomeação, é uma substituição semântica.
 
 ### Por que `possible_rename` é sempre WARNING
 
-Um `possible_rename` nunca é auto-classificado como BREAKING por duas razões:
+Um `possible_rename` nunca é classificado automaticamente como BREAKING por dois motivos:
 
-- Se era realmente um rename, a mudança é essencialmente compatível pra trás — o dado se moveu, mas não desapareceu. Marcar como BREAKING bloquearia migrations que deveriam passar.
-- Se era realmente um drop+add coincidente com tipos similares, o aspecto BREAKING está no drop. Marcar o par como BREAKING contaria a severidade duas vezes.
+- Se realmente foi uma renomeação, a alteração é essencialmente retrocompatível, os dados se moveram, mas não desapareceram. Bloqueá-la impediria migrações legítimas de prosseguir.
+- Se realmente foi uma remoção + adição coincidentes com tipos semelhantes, a natureza de quebra está na remoção. Marcar o par como BREAKING contaria a severidade duas vezes.
 
-WARNING captura a semântica certa: "isso parece um rename, mas um humano precisa confirmar antes de aprovar."
+WARNING captura a semântica correta: "isso parece uma renomeação, mas um humano deve confirmar antes de aprovar."
 
 ### Níveis de confiança
 
-Cada `possible_rename` carrega um campo `confidence` que reflete quão forte é o sinal de rename.
+Cada `possible_rename` carrega um campo `confidence` que reflete a força do sinal de renomeação.
 
-| Nível | Critério | Significado prático |
+| Nível | Critérios | Significado prático |
 |---|---|---|
-| `high` | Nomes de coluna similares **e** mesmo tipo **e** \|diferença_ordinal\| ≤ 2 | Sinal forte de rename. Os três sinais independentes se alinham. Ainda requer confirmação manual, mas é o caso mais provável de rename real. |
-| `medium` | Mesmo tipo **e** \|diferença_ordinal\| ≤ 2 | Nomes diferem mas alinhamento de posição+tipo sugere rename. Pode ser um refactor onde a coluna foi renomeada significativamente. Revisão necessária. |
-| `low` | Apenas tipo-compatível | Poderia ser rename, poderia ser coincidência. Máxima cautela necessária. Trate como drop+add suspeito até ser provado o contrário. |
+| `high` | Nomes de coluna semelhantes **e** mesmo tipo **e** \|ordinal_diff\| ≤ 2 | Sinal forte de renomeação. Os três sinais independentes se alinham. Ainda requer confirmação manual, mas é a renomeação verdadeira mais provável. |
+| `medium` | Mesmo tipo **e** \|ordinal_diff\| ≤ 2 | Os nomes diferem, mas o alinhamento de posição e tipo sugere renomeação. Pode ser uma refatoração onde a coluna foi renomeada significativamente. Revisão necessária. |
+| `low` | Apenas tipo compatível | Pode ser uma renomeação, pode ser coincidência. Mais cautela necessária. Trate como remoção+adição suspeita até prova em contrário. |
 
-### Como escalar a detecção de rename para BREAKING
+### Como escalar a detecção de renomeação para BREAKING
 
-Se seu pipeline de auditoria exige que toda remoção seja explicitamente aprovada, independentemente de suspeita de rename:
+Se seu pipeline de auditoria exige que toda remoção seja explicitamente aprovada independentemente da suspeita de renomeação:
 
 ```yaml
 overrides:
   possible_rename: BREAKING
 ```
 
-A mudança ainda é detectada como `possible_rename` (não dividida em drop/add separados), mas vai bloquear o pipeline em vez de avisar.
+A alteração ainda é detectada como `possible_rename` (não dividida em remoção/adição separadas), mas bloqueará o pipeline em vez de apenas avisar.
 
 <br>
 
-## Como overrides interagem com a classificação
+## Como as substituições interagem com a classificação
 
-Overrides de policy aplicam **depois** da classificação default do DriftBrake. O pipeline:
+As substituições de política se aplicam **após** a classificação padrão do DriftBrake. O pipeline é:
 
-1. Schema comparator detecta cada mudança e atribui a severidade default (segundo as tabelas acima).
-2. Se um policy file foi carregado, `apply_policy()` roda como pós-processamento.
-3. Pra cada mudança, a policy verifica `ignore_tables`, depois `ignore_columns`, depois `overrides`.
-4. Overrides **substituem a severidade** e anexam `[overridden by policy: SEVERIDADE]` à descrição original para trilha de auditoria.
+1. O comparador de esquema detecta cada alteração e atribui sua severidade padrão (de acordo com as tabelas acima).
+2. Se um arquivo de política estiver carregado, `apply_policy()` é executado como pós-processamento.
+3. Para cada alteração, a política verifica `ignore_tables`, depois `ignore_columns`, depois `overrides`.
+4. As substituições **substituem a severidade** e acrescentam `[overridden by policy: SEVERITY]` à descrição original para trilha de auditoria.
 
 ### Mecânica exata do `apply_policy`
 
 ```python
 def apply_policy(result, policy: Policy):
     for change in result.changes:
-        # Ignore_tables: pula completamente — mudança não é reportada de jeito nenhum
+        # Ignore_tables: pular completamente, a alteração não é reportada
         if change.table_name in policy.ignore_tables:
             continue
-        # Ignore_columns: pula (formato "tabela.coluna")
+        # Ignore_columns: pular (formato "table.column")
         col_key = f"{change.table_name}.{change.column_name}" if change.column_name else None
         if col_key and col_key in policy.ignore_columns:
             continue
-        # Overrides: substitui severidade + anexa à descrição
+        # Overrides: substituir severidade + acrescentar à descrição
         change_type_name = change.change_type.value  # ex: "nullable_column_added"
         if change_type_name in policy.overrides:
             new_severity = Severity(policy.overrides[change_type_name])
@@ -430,80 +496,82 @@ def apply_policy(result, policy: Policy):
                 description=f"{change.description} [overridden by policy: {new_severity.value}]")
 ```
 
-A chave de override no YAML **deve corresponder exatamente a `change_type.value`** (snake_case). O conjunto completo de chaves válidas é: `table_added`, `table_removed`, `column_added`, `nullable_column_added`, `column_removed`, `type_changed`, `nullable_changed`, `default_changed`, `primary_key_changed`, `unique_changed`, `foreign_key_changed`, `foreign_key_added`, `ordinal_position_changed`, `possible_rename`.
+A chave de substituição no YAML **deve corresponder exatamente a `change_type.value`** (snake_case). O conjunto completo de chaves válidas é: `table_added`, `table_removed`, `column_added_nullable`, `column_added_with_default`, `column_added_not_null`, `column_removed`, `type_changed`, `not_null_constraint_added`, `not_null_constraint_removed`, `default_changed`, `primary_key_changed`, `unique_changed`, `foreign_key_changed`, `foreign_key_added`, `ordinal_position_changed`, `possible_rename`, `index_added`, `index_removed`, `index_modified`.
 
-### Exemplos de override
+### Exemplos de substituição
 
 ```yaml
 overrides:
-  nullable_column_added: BREAKING   # Exige aprovação para toda expansão de schema
-  ordinal_position_changed: SAFE    # Suprime avisos de mudança posicional no seu ambiente
-  default_changed: BREAKING         # Trata mudanças comportamentais silenciosas como bloqueantes
-  possible_rename: BREAKING         # Força aprovação explícita de toda suspeita de rename
+  column_added_nullable: BREAKING   # Exigir aprovação para toda adição anulável
+  column_added_with_default: BREAKING  # Tratar adições NOT NULL+padrão como bloqueantes
+  ordinal_position_changed: SAFE    # Suprimir avisos de mudança posicional em seu ambiente
+  default_changed: BREAKING         # Tratar mudanças comportamentais silenciosas como bloqueantes
+  possible_rename: BREAKING         # Forçar aprovação explícita de toda suspeita de renomeação
+  index_removed: BREAKING           # Tratar remoções de índice como bloqueantes
 ```
 
-### Listas de ignore são absolutas
+### As listas de ignorar são absolutas
 
-`ignore_tables` e `ignore_columns` filtram mudanças **completamente** — o DriftBrake não as reporta de jeito nenhum, independente da severidade. Elas têm prioridade sobre os overrides.
+`ignore_tables` e `ignore_columns` filtram as alterações completamente, o DriftBrake não as reporta de forma alguma, independentemente da severidade. Elas têm prioridade sobre as substituições.
 
 ```yaml
 ignore_tables:
-  - alembic_version        # Artefato de ferramenta de migration
-  - flyway_schema_history  # Artefato de ferramenta de migration
+  - alembic_version        # Artefato de ferramentas de migração
+  - flyway_schema_history  # Artefato de ferramentas de migração
 
 ignore_columns:
-  - users.updated_at       # Timestamp automático, não faz parte do contrato de API
+  - users.updated_at       # Timestamp automático, não faz parte do contrato da API
   - orders.last_synced     # Campo operacional, não relevante para o contrato
 ```
 
-Use listas de ignore para campos que mudam frequentemente por razões operacionais e não fazem parte do contrato que você quer enforçar.
+Use listas de ignorar para campos que mudam frequentemente por razões operacionais e não fazem parte do contrato que você deseja aplicar.
 
 <br>
 
 ## Lógica de decisão: bloquear, perguntar, liberar
 
-Após todas as mudanças serem classificadas (incluindo pós-processamento de policy), o DriftBrake determina a maior severidade presente e decide se vai bloquear, perguntar ou liberar o pipeline.
+Após todas as alterações serem classificadas (incluindo o pós-processamento de política), o DriftBrake determina a severidade mais alta presente e decide se deve bloquear, perguntar ou liberar o pipeline.
 
 ```python
 # Pseudocódigo de decision.py
 if sev_upper in fail_on:
-    → bloquear (exit code 2)
+    → bloquear (código de saída 2)
 if sev_upper in ask_on and interactive_effective:
-    → perguntar (solicita confirmação do usuário)
+    → perguntar (solicitar confirmação do usuário)
 else:
-    → liberar (exit code 0)
+    → liberar (código de saída 0)
 ```
 
-Configuração default:
-- `fail_on = ["BREAKING"]` — qualquer mudança BREAKING bloqueia automaticamente.
-- `ask_on = ["WARNING"]` — qualquer mudança WARNING solicita confirmação em modo interativo; em modo não-interativo (CI), libera sem perguntar.
+Configuração padrão:
+- `fail_on = ["BREAKING"]` — qualquer alteração BREAKING bloqueia automaticamente.
+- `ask_on = ["WARNING"]` — qualquer alteração WARNING solicita confirmação no modo interativo; no modo não-interativo (CI), libera sem perguntar.
 
-A decisão é baseada na única severidade mais alta entre todas as mudanças. Uma execução com 10 mudanças SAFE e 1 BREAKING bloqueia tão firmemente quanto uma execução com apenas 1 BREAKING.
+A decisão é baseada na severidade mais alta única entre todas as alterações. Uma execução com 10 alterações SAFE e 1 alteração BREAKING bloqueia tão firmemente quanto uma execução com 1 alteração BREAKING.
 
 <br>
 
 ## Formato de saída do reporter
 
-O `FacadeTerminalReporter` formata a saída da seguinte forma:
+O `FacadeTerminalReporter` formata a saída da seguinte maneira:
 
 ```
 [OK]      DriftBrake: no schema drift detected.
 [INFO]    DriftBrake: N safe schema change(s) detected.
 [WARN]    DriftBrake: N warning change(s) detected.
 [BLOCKED] DriftBrake: N breaking change(s) detected.
-[BLOCKED] {motivo}
+[BLOCKED] {reason}
           Pipeline blocked.
 [OK]      Pipeline released.
 ```
 
 Comportamentos principais:
 
-- `[OK]` sem drift: emitido quando há zero mudanças de qualquer tipo.
-- `[INFO]` para SAFE: emite apenas contagem, a não ser que `verbose=True`. Quando `verbose=True`, cada mudança SAFE é listada individualmente.
-- `[WARN]` para WARNING: **sempre lista cada mudança individualmente**, independente da configuração de verbose.
-- `[BLOCKED]` para BREAKING: **sempre lista cada mudança individualmente**; escrito para stderr.
-- `[BLOCKED]` + `Pipeline blocked.`: emitido após a lista de mudanças quando o pipeline é bloqueado; escrito para stderr.
-- `[OK]` + `Pipeline released.`: emitido quando o pipeline está autorizado a prosseguir.
+- `[OK]` sem drift: emitido quando não há alterações de nenhum tipo.
+- `[INFO]` para SAFE: emite apenas uma contagem, a menos que `verbose=True`. Quando `verbose=True`, cada alteração SAFE é listada individualmente.
+- `[WARN]` para WARNING: **sempre lista cada alteração individualmente**, independentemente da configuração verbose.
+- `[BLOCKED]` para BREAKING: **sempre lista cada alteração individualmente**; escrito no stderr.
+- `[BLOCKED]` + `Pipeline blocked.`: emitido após a lista de alterações quando o pipeline está bloqueado; escrito no stderr.
+- `[OK]` + `Pipeline released.`: emitido quando o pipeline tem permissão para prosseguir.
 
 ### Exemplo: múltiplas severidades presentes
 
@@ -517,112 +585,111 @@ Comportamentos principais:
           Pipeline blocked.
 ```
 
-Mudanças SAFE aparecem apenas como contagem em modo não-verbose. Mudanças WARNING e BREAKING são sempre listadas com tabela, coluna e descrição.
+Alterações SAFE aparecem apenas como uma contagem no modo não-verbose. Alterações WARNING e BREAKING são sempre listadas com tabela, coluna e descrição.
 
 <br>
 
 ## Cenários mistos
 
-Quando uma única migration toca múltiplas tabelas ou colunas, o DriftBrake reporta cada mudança independentemente. A decisão no nível de pipeline é baseada na **maior severidade presente**:
+Quando uma única migração afeta várias tabelas ou colunas, o DriftBrake reporta cada alteração de forma independente. A decisão no nível do pipeline é baseada na **severidade mais alta presente**:
 
-| Maior severidade | Resultado do pipeline |
+| Severidade mais alta | Resultado do pipeline |
 |---|---|
-| Sem mudanças | Libera |
-| Apenas SAFE | Libera |
-| WARNING (não-interativo ou não está em `ask_on`) | Libera |
-| WARNING (interativo + `ask_on` inclui WARNING) | Pergunta ao usuário |
-| BREAKING (em `fail_on`) | Bloqueia |
+| Sem alterações | Liberar |
+| Apenas SAFE | Liberar |
+| WARNING (não-interativo ou não em `ask_on`) | Liberar |
+| WARNING (interativo + `ask_on` inclui WARNING) | Perguntar ao usuário |
+| BREAKING (em `fail_on`) | Bloquear |
 
-Os três níveis de severidade podem aparecer na mesma execução. O reporter mostra cada um presente, em ordem (SAFE → WARNING → BREAKING), cada um com seu próprio prefixo.
+Todos os três níveis de severidade podem aparecer na mesma execução. O reporter mostra cada um presente, em ordem (SAFE → WARNING → BREAKING), cada um com seu próprio prefixo.
 
 <br>
 
-## Casos extremos
+## Casos de borda
 
-### Schemas configurados mas não presentes no banco
+### Schemas configurados mas não presentes no banco de dados
 
-Se `schemas=["public", "staging"]` está configurado mas `staging` não existe, o DriftBrake levanta `SchemaNotFoundError` (exit code 5) listando os schemas disponíveis. Isso falha barulhento em vez de silenciosamente reportar "sem drift".
+Se `schemas=["public", "staging"]` estiver configurado mas `staging` não existir, o DriftBrake lança `SchemaNotFoundError` (código de saída 5) listando os schemas disponíveis. Isso falha de forma ruidosa em vez de reportar silenciosamente "sem drift."
 
 ### Arquivo de contrato presente mas corrompido
 
-Se `schema.lock.json` existe mas não é JSON válido, o DriftBrake levanta `SchemaContractNotFoundError` (exit code 4) com a localização do erro de parse. Mesmo exit code que "contrato faltando" porque em ambos os casos o contrato é inutilizável.
+Se `schema.lock.json` existir mas não for JSON válido, o DriftBrake lança `SchemaContractNotFoundError` (código de saída 4) com a localização do erro de análise. Mesmo código de saída que "contrato ausente" porque em ambos os casos o contrato é inutilizável.
 
 ### Arquivo de contrato presente mas estruturalmente inválido
 
-Se `schema.lock.json` é JSON válido mas faltam campos obrigatórios (ex: `{}`), o DriftBrake levanta `SchemaContractNotFoundError` listando os campos faltantes.
+Se `schema.lock.json` for JSON válido mas estiver faltando campos obrigatórios (ex: `{}`), o DriftBrake lança `SchemaContractNotFoundError` listando os campos ausentes.
 
-### Filesystem read-only durante `init`
+### Sistema de arquivos somente leitura durante `init`
 
-Se o DriftBrake tenta escrever `schema.lock.json` num filesystem read-only (sandbox de CI, container hardened), levanta `ContractWriteError` (exit code 6) com o caminho e o erro de OS subjacente.
+Se o DriftBrake tentar escrever `schema.lock.json` em um sistema de arquivos somente leitura (sandbox CI, contêiner reforçado), ele lança `ContractWriteError` (código de saída 6) com o caminho e o erro do SO subjacente.
 
-### Banco inacessível
+### Banco de dados inacessível
 
-Se o banco não consegue ser conectado, o DriftBrake levanta `SchemaConnectionError` (exit code 3) com o erro subjacente do driver. Exit code 3 cobre tanto "servidor não rodando" quanto "autenticação falhou" — a mensagem distingue os dois.
+Se não for possível conectar-se ao banco de dados, o DriftBrake lança `SchemaConnectionError` (código de saída 3) com o erro do driver subjacente. O código de saída 3 cobre tanto "servidor não está em execução" quanto "autenticação falhou", a mensagem distingue os dois.
 
-### Direção ambígua de `nullable_changed`
+### `possible_rename` + tipos incompatíveis = remoção e adição separadas
 
-`nullable_changed` cobre tanto "NOT NULL adicionado" (BREAKING) quanto "NOT NULL removido" (WARNING) sob o mesmo valor de `change_type`. Um override de policy não pode alvejá-los independentemente. Se você precisa tratar "NOT NULL removido" como SAFE, use `ignore_columns` para suprimir a coluna específica, não `nullable_changed: SAFE` (que também rebaixaria a direção BREAKING).
+Se uma coluna removida e uma coluna adicionada tiverem tipos BREAKING-incompatíveis, a heurística de renomeação não é acionada. O resultado é um `column_removed` (BREAKING) + uma alteração de coluna adicionada (`column_added_nullable` SAFE, `column_added_with_default` WARNING ou `column_added_not_null` BREAKING), dependendo das propriedades da coluna adicionada. Isso reflete uma substituição semântica verdadeira, não uma renomeação.
 
-### Severidade de `column_added` depende das propriedades da coluna, não apenas do change type
+### Formato `driftbrake.yml` removido (v0.2.0)
 
-Uma coluna NOT NULL adicionada sem default é BREAKING. O mesmo change type `column_added` com um default presente é WARNING. Um override de policy de `column_added: WARNING` rebaixaria o caso sem default. Use isso apenas se todo escritor da tabela afetada já foi atualizado para fornecer o campo.
+Carregar arquivos `driftbrake.yml` que usam as chaves aninhadas `tables.ignore` / `columns.ignore` (formato v0.0.2) agora lança `ConfigurationError` imediatamente. Este formato foi descontinuado com um `DeprecationWarning` na v0.1.1 e removido na v0.2.0. Migre para `driftbrake.policy.yml` com as chaves planas `ignore_tables` / `ignore_columns`.
 
-### `possible_rename` + tipos incompatíveis = drop e add separados
+### `index_modified` vs `index_removed` + `index_added` separados
 
-Se uma coluna removida e uma coluna adicionada têm tipos BREAKING-incompatíveis, o heurístico de rename não dispara. O resultado é um `column_removed` (BREAKING) + um `nullable_column_added` (SAFE) ou `column_added` (WARNING/BREAKING), dependendo das propriedades da coluna adicionada. Isso reflete uma substituição semântica real, não um rename.
+Quando um índice existe tanto antes quanto depois mas sua definição mudou (colunas diferentes, unicidade diferente, tipo diferente ou predicado diferente), o DriftBrake emite um único `index_modified` (BREAKING) em vez de `index_removed` + `index_added`. O nome é a chave de correspondência. Se o mesmo nome não existir em ambos os lados, é detectado como remoção + adição independentes.
 
-### Formato `driftbrake.yml` depreciado (v0.1.1)
-
-Carregar arquivos `driftbrake.yml` que usam as chaves aninhadas `tables.ignore` / `columns.ignore` (formato v0.0.2) agora emite `DeprecationWarning` em tempo de execução. Este formato será removido na v0.2.0. Migre para `driftbrake.policy.yml` com as chaves planas `ignore_tables` / `ignore_columns`. Os dois formatos são aplicados em etapas diferentes do pipeline (Settings pré-comparação; Policy pós-comparação) e não conflitam quando ambos estão presentes — veja DOCUMENTATION-br.md § *Arquivos de política* para o contrato de precedência.
+Observação: O DriftBrake compara colunas de índice em ordem classificada, a ordem das colunas dentro de um índice não é rastreada como uma alteração. Apenas o conjunto de colunas importa.
 
 <br>
 
 ## Uso programático para auditores
 
-### Por que classificações importam em pipelines
+### Por que as classificações importam em pipelines
 
-Quando o DriftBrake está embutido em um pipeline de CI/CD, a classificação determina se um deployment é automaticamente bloqueado, requer aprovação humana ou prossegue. Acertar as classificações significa:
+Quando o DriftBrake está incorporado em um pipeline CI/CD, a classificação determina se uma implantação é bloqueada automaticamente, requer aprovação humana ou prossegue. Acertar as classificações significa:
 
-- Mudanças BREAKING interrompem o deployment automaticamente, prevenindo indisponibilidades causadas por drift de schema.
-- Mudanças WARNING surgem para revisão sem parar o pipeline em ambientes de CI não-interativo.
-- Mudanças SAFE são registradas mas nunca bloqueiam.
+- Alterações BREAKING interrompem a implantação automaticamente, prevenindo interrupções causadas por drift de esquema.
+- Alterações WARNING aparecem para revisão sem parar o pipeline em ambientes CI não-interativos.
+- Alterações SAFE são registradas, mas nunca bloqueiam.
 
-Policies mal configuradas (ex: `nullable_column_added: SAFE` quando já defaulta para SAFE, ou `foreign_key_changed: WARNING` quando deveria ser BREAKING) podem silenciosamente passar mudanças que quebram consumidores downstream.
+Políticas mal configuradas (ex: `nullable_column_added: SAFE` quando já é o padrão SAFE, ou `foreign_key_changed: WARNING` quando deveria ser BREAKING) podem silenciosamente aprovar alterações que quebram consumidores downstream.
 
-### Sobrescrevendo severidade via YAML
+### Substituindo severidade via YAML
 
 ```yaml
-# driftbrake.yaml ou seção de policy
-policy:
-  overrides:
-    nullable_column_added: BREAKING   # Mais estrito: exige aprovação para todas as adições
-    ordinal_position_changed: SAFE    # Mais solto: ignora mudanças posicionais no seu ambiente
-    possible_rename: BREAKING         # Escala: trata toda suspeita de rename como bloqueante
-  ignore_tables:
-    - alembic_version
-  ignore_columns:
-    - users.internal_notes
+# driftbrake.policy.yml
+overrides:
+  column_added_nullable: BREAKING   # Mais estrito: exigir aprovação para todas as adições
+  column_added_not_null: WARNING    # Mais flexível: permitir NOT NULL sem padrão após atualização do escritor
+  ordinal_position_changed: SAFE    # Suprimir avisos de mudança posicional em seu ambiente
+  possible_rename: BREAKING         # Escalar: tratar toda suspeita de renomeação como bloqueante
+  index_removed: BREAKING           # Escalar: tratar remoções de índice como bloqueantes
+ignore_tables:
+  - alembic_version
+ignore_columns:
+  - users.internal_notes
 ```
 
-A chave de override deve ser exatamente o `change_type.value` em snake_case. Case sensitivity importa — `NULLABLE_COLUMN_ADDED` não vai fazer match.
+A chave de substituição deve ser o `change_type.value` exato em snake_case. A sensibilidade a maiúsculas e minúsculas importa, `COLUMN_ADDED_NULLABLE` não corresponderá.
 
-### Sobrescrevendo severidade via Python API
+### Substituindo severidade via API Python
 
 ```python
 from driftbrake.models import Policy
 from driftbrake.policy import apply_policy
 
 policy = Policy(
-    overrides={"nullable_column_added": "BREAKING"},
+    overrides={"column_added_nullable": "BREAKING"},
     ignore_tables=["alembic_version"],
     ignore_columns=["users.updated_at"],
 )
 result = apply_policy(drift_result, policy)
 ```
 
-### CLI e Biblioteca
+### CLI e biblioteca
 
-Para uso via CLI, flags de configuração e receitas de integração, veja [`DOCUMENTATION-BR.md`](DOCUMENTATION-BR.md). Este documento (AUDIT-br.md) cobre apenas lógica de classificação e mecânica de policy.
+Para uso de CLI, flags de configuração e receitas de integração, consulte [`DOCUMENTATION.md`](DOCUMENTATION.md). Este documento (AUDIT.md) cobre apenas a lógica de classificação e a mecânica de políticas.
 
 <br>
 
@@ -630,13 +697,13 @@ Para uso via CLI, flags de configuração e receitas de integração, veja [`DOC
 
 ## Nota de manutenção
 
-Esse documento é a trilha de auditoria de decisões de classificação. **Quando uma severidade default muda entre versões, esse documento é atualizado junto com o CHANGELOG.**
+Este documento é a trilha de auditoria de decisões de classificação. **Quando uma severidade padrão muda entre versões, este documento é atualizado juntamente com o CHANGELOG.**
 
-Pro código-fonte que implementa essas regras, veja:
+Para o código-fonte que implementa estas regras, consulte:
 
-- `src/driftbrake/classifiers/impact_classifier.py` — aplica defaults de severidade.
+- `src/driftbrake/classifiers/impact_classifier.py` — aplica os padrões de severidade.
 - `src/driftbrake/classifiers/type_compatibility.py` — lógica da matriz de tipos.
-- `src/driftbrake/comparators/schema_comparator.py` — detecção de mudanças e heurístico `possible_rename`.
-- `src/driftbrake/policy.py` — pós-processamento do `apply_policy()`.
+- `src/driftbrake/comparators/schema_comparator.py` — detecção de alterações e heurística `possible_rename`.
+- `src/driftbrake/policy.py` — pós-processamento `apply_policy()`.
 - `src/driftbrake/decision.py` — lógica de decisão bloquear / perguntar / liberar.
-- `src/driftbrake/reporters/facade_terminal.py` — formato de saída do reporter terminal.
+- `src/driftbrake/reporters/facade_terminal.py` — formato de saída do reporter de terminal.
