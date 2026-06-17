@@ -1,51 +1,45 @@
 # driftbrake.example.yml
 # Copie este arquivo para driftbrake.yml e personalize conforme necessário.
+# Passe-o à CLI com:  driftbrake check --config driftbrake.yml
 #
-# Este arquivo controla como o DriftBrake compara schemas, quais
-# níveis de severidade causam falhas e quais tabelas/colunas ignorar.
+# IMPORTANTE (leia antes de usar)
+# --------------------------------
+# Existem DOIS arquivos de configuração no DriftBrake, com formatos diferentes:
+#
+#   1. driftbrake.yml  (ESTE arquivo), lido pela CLI via --config.
+#        Hoje a engine de comparação só consulta `fail_on`. As demais chaves
+#        (`warn_on`, `schemas`, `rules`) são validadas mas ainda NÃO são
+#        aplicadas pela comparação. Além disso, `--fail-on` na CLI sobrescreve
+#        o `fail_on` daqui.
+#
+#   2. driftbrake.policy.yml, lido pela BIBLIOTECA (DriftBrake(policy_path=...)).
+#        É o mecanismo que de fato funciona hoje para:
+#          - sobrescrever a severidade de um change_type (overrides);
+#          - ignorar tabelas inteiras (ignore_tables);
+#          - ignorar colunas específicas (ignore_columns).
+#        Veja a página "Configuration" da documentação para o formato completo.
+#
+# O formato v0.0.2 (`tables.ignore` / `columns.ignore` aninhados) foi REMOVIDO
+# em v0.2.0 e levanta ConfigurationError. Use driftbrake.policy.yml para ignores.
 
 # Níveis de severidade que causam código de saída não-zero (falha).
 # Valores possíveis: BREAKING, WARNING, SAFE
 fail_on:
   - BREAKING
 
-# Níveis de severidade que emitem avisos (mas não causam falha por padrão).
+# Níveis de severidade que emitem avisos (não causam falha por si só).
 warn_on:
   - WARNING
 
-# Filtragem de schemas
+# Filtragem de schemas (reservado, ainda não aplicado pela engine).
+# Para escolher os schemas hoje, use a flag --schemas da CLI.
 schemas:
-  # Comparar apenas estes schemas (deixe vazio para incluir todos)
   include:
     - public
-  # Excluir estes schemas da comparação
   exclude: []
 
-# Filtragem de tabelas
-tables:
-  # Ignorar completamente estas tabelas (nenhuma comparação realizada)
-  ignore:
-    - alembic_version
-    - django_migrations
-    - flyway_schema_history
-
-# Filtragem de colunas
-columns:
-  # Ignorar colunas específicas por tabela (padrões glob suportados)
-  ignore:
-    # Ignorar 'updated_at' em todas as tabelas que correspondem a 'orders*'
-    orders:
-      - updated_at
-      - created_at
-    customers:
-      - last_login
-
-# Sobrescritas de regras personalizadas
-# Estas substituem a classificação padrão para tipos específicos de alteração.
+# Sobrescritas de severidade por tipo de mudança (reservado, ainda não aplicado).
+# Para overrides que funcionam hoje, use `overrides:` em driftbrake.policy.yml.
 rules:
-  # Tratar alterações de posição ordinal como SAFE em vez de WARNING
   ordinal_position_changed: SAFE
-  # Tratar alterações de valor padrão como WARNING (comportamento padrão)
   default_changed: WARNING
-  # Tratar alterações de restrição unique como SAFE
-  # unique_changed: SAFE

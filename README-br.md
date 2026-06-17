@@ -20,29 +20,21 @@
 ![Python](https://img.shields.io/badge/python-3.10+-blue.svg)
 ![License](https://img.shields.io/badge/MIT-License-blue.svg)
 
-**DriftBrake** é um projeto de pacote Python, que lê automaticamente o schema atual do banco de dados PostgreSQL, compara contra um contrato versionado, classifica os drifts por impacto e pode bloquear pipelines antes que eles quebrem em produção.
-
 A ferramenta identifica bugs capazes de corromper ou quebrar pipelines em silêncio, antes do deploy em produção, com um conceito simples: você cria um "contrato" que descreve exatamente como seu banco deve ser. Antes de executar qualquer pipeline, a ferramenta compara o banco real com esse contrato e avisa (ou bloqueia) se algo mudou.
 
 <br>
 
-> [!NOTE]
-> **Documentação:** [Clique aqui!](https://github.com/yurivski/DriftBrake/blob/main/docs/DOCUMENTATION-BR.md)  
+## DriftBrake
 
+O DriftBrake atua antes da execução de pipelines, verificando se o banco real ainda respeita o contrato esperado pelos consumidores de dados. Ele detecta desvios, classifica o impacto e bloqueia execuções quando necessário, mas nunca altera o banco. DriftBrake não é uma ferramenta de migration. Ele não aplica mudanças no banco, não gera scripts SQL e não gerencia versões de schema.
 
-## A ferramenta
+## Pacote Python
 
-DriftBrake não é uma ferramenta de migration. Ele não aplica mudanças no banco, não gera scripts SQL e não gerencia versões de schema.
+Este arquivo README contém apenas informações básicas relacionadas à instalação do DriftBrake via pip. Esse pacote é experimental e pode sofrer alterações em versões futuras. O uso do DriftBrake pode ser feito por CLI ou (para personalização de políticas de detecção) implementado diretamente no código, consulte as instruções de compilação em ["Python API"](https://driftbrake.pages.dev/#en/python-api). 
 
-O DriftBrake atua **antes** da execução de pipelines, verificando se o banco real ainda respeita o contrato esperado pelos consumidores de dados. Ele detecta desvios, classifica o impacto e bloqueia execuções quando necessário, mas nunca altera o banco.
+O pacote Python para DriftBrake lê automaticamente o schema atual do banco de dados PostgreSQL, compara contra um contrato versionado, classifica os drifts por impacto e pode bloquear pipelines antes que eles quebrem em produção.
 
-**Resumo:**
-
-- Lê o schema do PostgreSQL
-- Compara contra um contrato
-- Classifica mudanças por impacto
-- Bloqueia pipelines com breaking changes
-- Gera relatórios JSON, HTML e Markdown
+**NOTA:** Se estiver usando isso com um banco de dados que não seja PostgreSQL (MySQL, SQLite, SQL Server, etc.) você poderá encontrar erros inesperados. Na versão atual o DriftBrake é construído inteiramente em torno da semântica do PostgreSQL: o leitor de schema consulta `information_schema.schemata` e lê opções de índice exclusivas do Postgres (`postgresql_using`, `postgresql_where`), e a matriz de compatibilidade de tipos segue as regras de cast do PostgreSQL (`varchar`, `text`, `bigint`, `timestamptz`, etc.). Outros bancos ainda não são suportados.
 
 <br>
 
@@ -54,86 +46,6 @@ pip install "driftbrake[postgres]"
 ```
 
 > O extra `[dev]` inclui `pre-commit`, `ruff`, `mypy`, `pytest` e as demais ferramentas de desenvolvimento.
-
-## Exemplo de Fluxo de trabalho
-
-O `schema.lock.json` (contrato) vai ser gerado automaticamente quando você rodar o comando `init`.
-
-```
-banco de dados real
-       │
-       ▼
-  [1] init          ← tira a "foto" do banco e salva como contrato
-       │
-       ▼
- schema.lock.json   ← esse arquivo é o contrato (contrato versionado no Git).
-       │
-       │    (o banco pode mudar ao longo do tempo)
-       │
-       ▼
-  [2] check         ← compara o banco atual contra o contrato
-       │
-       ├── tudo igual → pipeline pode rodar
-       └── mudança detectada → alerta ou bloqueio
-```
-
-Quando uma mudança é deliberada e aprovada, você usa `update-contract` para atualizar o contrato. Quando quer comparar dois estados sem tocar no contrato, usa `diff` ou `snapshot`.
-
-<br>
-
-## Glossário de termos
-
-**Contrato (`schema.lock.json`):** o arquivo JSON que descreve como o banco *deve* ser. Funciona como um "lock file" (daí o nome), assim como `package-lock.json` trava as versões de pacotes, esse arquivo trava a estrutura do banco.
-
-**BREAKING:** mudança que quebra consumidores existentes. Exemplos: remover uma coluna, mudar o tipo de `INTEGER` para `VARCHAR`, adicionar uma coluna `NOT NULL` sem valor padrão.
-
-**WARNING:** mudança que merece atenção mas não necessariamente quebra nada agora. Exemplos: adicionar uma coluna `NOT NULL` com valor padrão, alterar um valor padrão.
-
-**SAFE:** mudança sem impacto nos consumidores existentes. Exemplos: adicionar uma coluna nullable, criar uma nova tabela.
-
-**Diff:** a diferença encontrada entre o contrato (o que era esperado) e o banco real (o que existe agora).
-
-> [!NOTE]
-> ***Contrato esperado & banco atual:** o comparador sempre trata o contrato como a "verdade combinada" e o banco como o "estado real". Se algo existe no banco mas não no contrato, é uma adição. Se existe no contrato mas sumiu do banco, é uma remoção.*
-
-
-## Exemplo de uso inicial
-
-**Criar o contrato inicial:**
-
-```bash
-driftbrake init --db-url "$DATABASE_URL" --output schema.lock.json
-```
-
-**Verificar antes do pipeline:**
-
-```bash
-driftbrake check \
-  --db-url "$DATABASE_URL" \
-  --contract schema.lock.json \
-  --fail-on BREAKING \
-  --json schema_diff.json \
-  --html schema_report.html \
-  --markdown schema_report.md
-```
-
-**Atualizar o contrato após aprovar mudanças:**
-
-```bash
-driftbrake update-contract --db-url "$DATABASE_URL" --contract schema.lock.json
-```
-
-**Salvar um snapshot sem alterar o contrato:**
-
-```bash
-driftbrake snapshot --db-url "$DATABASE_URL" --output snapshots/schema_antes.json
-```
-
-**Comparar dois snapshots (ou um snapshot contra o banco ao vivo):**
-
-```bash
-driftbrake diff --old snapshots/schema_antes.json --new-db "$DATABASE_URL"
-```
 
 <br>
 
@@ -182,7 +94,6 @@ A ferramenta detecta as seguintes categorias de alteração em cada comparação
 | `ordinal_position_changed` | A posição da coluna na tabela mudou |
 | `possible_rename` | Uma coluna foi removida e outra coluna semelhante foi adicionada na mesma tabela. A ferramenta trata isso apenas como uma suspeita de rename, nunca como confirmação. Sempre classificado como `WARNING`. |
 
-> [!IMPORTANT]
 > `possible_rename` é uma heurística, nunca uma confirmação. O DriftBrake sinaliza a suspeita quando uma coluna removida e uma coluna adicionada parecem compatíveis por tipo. A validação final deve ser feita por quem revisa a migration.
 
 <br>
@@ -206,71 +117,6 @@ Cada ocorrência de `possible_rename` traz um campo `confidence` que indica o gr
 
 <br>
 
-### Tipos PostgreSQL (matriz de compatibilidade)
-
-| Conversão | Severidade |
-|---|---|
-| `varchar(50)` → `varchar(100)` | SAFE |
-| `varchar(100)` → `varchar(50)` | BREAKING |
-| `text` → `varchar(n)` | BREAKING |
-| `varchar(n)` → `text` | SAFE |
-| `integer` → `bigint` | WARNING |
-| `bigint` → `integer` | BREAKING |
-| `smallint` → `integer` | SAFE |
-| `numeric(10,2)` → `numeric(12,2)` | SAFE |
-| `numeric(12,2)` → `numeric(10,2)` | BREAKING |
-| `numeric` → `text` | BREAKING |
-| `date` → `timestamp` | WARNING |
-| `timestamp` → `date` | BREAKING |
-
----
-<br>
-
-## Biblioteca Python
-
-O mesmo motor de detecção está disponível como biblioteca Python. A integração mais simples é uma única linha antes do pipeline:
-
-```python
-from driftbrake import DriftBrake
-
-DriftBrake.run_from_env()
-
-run_pipeline()
-```
-
-Para pipelines que precisam inspecionar o resultado antes de agir, `protect()` retorna um `DiffResult` e lança exceções tipadas em caso de falha:
-
-```python
-from driftbrake import DriftBrake
-from driftbrake.exceptions import BreakingChangesDetected
-
-try:
-    result = DriftBrake.from_env().protect()
-except BreakingChangesDetected as e:
-    notify_slack(f"Pipeline bloqueado: {len(e.result.changes)} breaking changes")
-    raise
-
-run_pipeline(result)
-```
-
-Consulte a documentação completa para overrides de política, reporters customizados, suporte a async e a API de context manager.
-
-## Stack
-
-- **SQLAlchemy** — reflection/inspection do PostgreSQL
-- **Typer** — CLI
-- **Rich** — output no terminal
-- **Jinja2** — templates HTML
-- **python-dotenv** — variáveis de ambiente
-- **PyYAML** — configuração
-- **pytest** — testes
-
 ## Licença
 
 **MIT license**
-
-## Autor
-
-**Yuri Pontes** — Ex-Cabo do Exército Brasileiro em transição para engenharia de dados.
-
-[LinkedIn](https://www.linkedin.com/in/yuri-pontes-4ba24a345/) · [GitHub](https://github.com/yurivski)
