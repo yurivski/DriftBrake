@@ -10,7 +10,7 @@
 
 <div align="center">
 
-## Detecte, classifique e bloqueie drifts de schemas no PostgreSQL antes que seus pipelines sejam corrompidos.
+### Detecte, classifique e bloqueie drifts de schemas no PostgreSQL antes que seus pipelines sejam corrompidos.
 
 </div>
 
@@ -21,6 +21,8 @@
 ![License](https://img.shields.io/badge/MIT-License-blue.svg)
 
 A ferramenta identifica bugs capazes de corromper ou quebrar pipelines em silêncio, antes do deploy em produção, com um conceito simples: você cria um "contrato" que descreve exatamente como seu banco deve ser. Antes de executar qualquer pipeline, a ferramenta compara o banco real com esse contrato e avisa (ou bloqueia) se algo mudou.
+
+Consulte a documentação: [driftbrake.pages](https://driftbrake.pages.dev/#en/overview)
 
 <br>
 
@@ -36,7 +38,6 @@ O pacote Python para DriftBrake lê automaticamente o schema atual do banco de d
 
 **NOTA:** Se estiver usando isso com um banco de dados que não seja PostgreSQL (MySQL, SQLite, SQL Server, etc.) você poderá encontrar erros inesperados. Na versão atual o DriftBrake é construído inteiramente em torno da semântica do PostgreSQL: o leitor de schema consulta `information_schema.schemata` e lê opções de índice exclusivas do Postgres (`postgresql_using`, `postgresql_where`), e a matriz de compatibilidade de tipos segue as regras de cast do PostgreSQL (`varchar`, `text`, `bigint`, `timestamptz`, etc.). Outros bancos ainda não são suportados.
 
-<br>
 
 ## Instalação
 
@@ -47,7 +48,6 @@ pip install "driftbrake[postgres]"
 
 > O extra `[dev]` inclui `pre-commit`, `ruff`, `mypy`, `pytest` e as demais ferramentas de desenvolvimento.
 
-<br>
 
 ## Funcionamento
 
@@ -96,7 +96,6 @@ A ferramenta detecta as seguintes categorias de alteração em cada comparação
 
 > `possible_rename` é uma heurística, nunca uma confirmação. O DriftBrake sinaliza a suspeita quando uma coluna removida e uma coluna adicionada parecem compatíveis por tipo. A validação final deve ser feita por quem revisa a migration.
 
-<br>
 
 ### Confiança do `possible_rename`
 

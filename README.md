@@ -10,7 +10,7 @@
 
 <div align="center">
 
-## Detect, classify, and block schema drift in PostgreSQL before your pipelines get corrupted.
+### Detect, classify, and block schema drift in PostgreSQL before your pipelines get corrupted.
 
 </div>
 
@@ -21,6 +21,8 @@
 ![License](https://img.shields.io/badge/MIT-License-blue.svg)
 
 The tool identifies bugs capable of silently corrupting or breaking pipelines before deploying to production, with a simple concept: you create a "contract" describing exactly how your database should look. Before running any pipeline, the tool compares the actual database against this contract and warns you (or blocks you) if anything has changed.
+
+Consult the documentation: [driftbrake.pages](https://driftbrake.pages.dev/#en/overview)
 
 <br>
 
