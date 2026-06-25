@@ -6,7 +6,7 @@ acima de 100 caracteres terão quebras de linhas.
 
 import pytest
 
-from driftbrake.classifiers.type_compatibility import _canonicalize_type, classify_type_change
+from driftbrake.core.type_compatibility import _canonicalize_type, classify_type_change
 from driftbrake.models import Severity
 
 
@@ -125,10 +125,17 @@ class TestTypeCanonicalizer:
             ("time with time zone", "timetz"),
             ("character", "char"),
             ("character(10)", "char(10)"),
+            ("bpchar", "char"),  # nome interno de char(n) via pg_catalog
+            ("bpchar(10)", "char(10)"),
         ],
     )
     def test_alias_maps_to_canonical(self, alias: str, canonical: str):
         assert _canonicalize_type(alias) == canonical
+
+    def test_bpchar_does_not_produce_phantom_type_changed(self):
+        # char(10) relido como bpchar(10) via pg_catalog não deve gerar type_changed
+        assert classify_type_change("char(10)", "bpchar(10)") == Severity.SAFE
+        assert classify_type_change("bpchar(10)", "char(10)") == Severity.SAFE
 
     @pytest.mark.parametrize(
         "alias_a, alias_b",

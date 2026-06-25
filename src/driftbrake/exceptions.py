@@ -53,6 +53,18 @@ class ContractWriteError(DriftBrakeError):
     exit_code = 6
 
 
+class MissingDependencyError(DriftBrakeError):
+    """Extra opcional não instalado (ex.: driftbrake[parquet])."""
+
+    exit_code = 5
+
+
+class ParquetReadError(DriftBrakeError):
+    """Falha ao ler um dataset Parquet (diretório vazio, footer inválido)."""
+
+    exit_code = 3
+
+
 # Exceções legadas (v0.0.2) mantidas para compatibilidade
 
 

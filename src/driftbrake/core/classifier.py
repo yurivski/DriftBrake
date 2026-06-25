@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-from driftbrake.classifiers.type_compatibility import classify_type_change
-from driftbrake.models import ChangeType, SchemaChange, Severity
+from driftbrake.core.models import ChangeType, SchemaChange, Severity
+from driftbrake.core.type_compatibility import classify_type_change
 
 
 class ImpactClassifier:

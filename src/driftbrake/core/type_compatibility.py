@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import re
 
-from driftbrake.models import Severity
+from driftbrake.core.models import Severity
 
 # Regras de compatibilidade explícitas como triplas (from_pattern, to_pattern, severity).
 # Os padrões são comparados sem diferenciação de maiúsculas usando substring ou regex.
@@ -55,10 +55,20 @@ _COMPAT_RULES: list[tuple[str, str, Severity]] = [
 _PG_ALIASES: list[tuple[str, str]] = [
     ("character varying", "varchar"),
     ("character", "char"),
+    ("bpchar", "char"),  # nome interno de char(n) no pg_catalog; evita type_changed fantasma
     ("decimal", "numeric"),  # alias exato no catálogo do PostgreSQL; deve vir antes de "numeric"
     ("int8", "bigint"),
     ("int4", "integer"),
     ("int2", "smallint"),
+    ("int", "integer"),  # alias SQL-padrão de int4
+    # serial: o catálogo devolve o inteiro subjacente. Canonicalizar aqui
+    # mantém o caminho legado e o PostgresTypeAdapter falando a mesma língua.
+    ("bigserial", "bigint"),
+    ("smallserial", "smallint"),
+    ("serial8", "bigint"),
+    ("serial4", "integer"),
+    ("serial2", "smallint"),
+    ("serial", "integer"),
     ("float8", "double precision"),
     ("float4", "real"),
     ("bool", "boolean"),
@@ -77,7 +87,7 @@ def _canonicalize_type(type_str: str) -> str:
     """
     s = type_str.strip().lower()
     for alias, canonical in _PG_ALIASES:
-        # Substitui o alias preservando parâmetros: "character varying(100)" → "varchar(100)"
+        # Substitui o alias preservando parâmetros: "character varying(100)" -> "varchar(100)"
         if s == alias:
             return canonical
         if s.startswith(alias + "(") and s.endswith(")"):
@@ -106,13 +116,30 @@ def _extract_numeric_precision(type_str: str) -> tuple[int, int] | None:
     return None
 
 
+# Pares exatos (sobre nomes já canonicalizados) que o casamento por substring de
+# _COMPAT_RULES não expressa com segurança ("json" é substring de "jsonb",
+# "time" de "timestamp"). Mantém o caminho legado de acordo com a matriz canônica
+# e com a doc (json<->jsonb, char->text, time<->timetz).
+_EXACT_PAIRS: dict[tuple[str, str], Severity] = {
+    ("json", "jsonb"): Severity.SAFE,
+    ("jsonb", "json"): Severity.WARNING,
+    ("char", "text"): Severity.SAFE,
+    ("time", "timetz"): Severity.WARNING,
+    ("timetz", "time"): Severity.WARNING,
+}
+
+
 def classify_type_change(old_type: str, new_type: str) -> Severity:
     # Classifica uma alteração de tipo de coluna como SAFE, WARNING ou BREAKING.
-    if _normalize_type(old_type) == _normalize_type(new_type):
-        return Severity.SAFE
-
     old_norm = _normalize_type(old_type)
     new_norm = _normalize_type(new_type)
+
+    if old_norm == new_norm:
+        return Severity.SAFE
+
+    # Pares exatos têm prioridade sobre o casamento por substring (evita colisões).
+    if (old_norm, new_norm) in _EXACT_PAIRS:
+        return _EXACT_PAIRS[(old_norm, new_norm)]
 
     # Regras de VARCHAR(n) -> VARCHAR(m)
     old_len = _extract_varchar_length(old_norm)
@@ -124,6 +151,10 @@ def classify_type_change(old_type: str, new_type: str) -> Severity:
 
     # VARCHAR(n) -> TEXT: seguro
     if old_len is not None and "text" in new_norm:
+        return Severity.SAFE
+
+    # CHAR(n) -> TEXT: seguro (ampliação; espelha a matriz canônica CHAR->TEXT)
+    if old_norm.startswith("char") and new_norm == "text":
         return Severity.SAFE
 
     # NUMERIC(p1,s) -> NUMERIC(p2,s): seguro se p2 >= p1

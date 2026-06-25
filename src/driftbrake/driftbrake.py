@@ -7,7 +7,8 @@ import sys
 from pathlib import Path
 from typing import Literal
 
-from driftbrake.decision import decide
+from driftbrake.core.decision import decide
+from driftbrake.core.policy import Policy, apply_policy, load_policy
 from driftbrake.exceptions import (
     BreakingChangesDetected,
     ContractMissingError,
@@ -17,7 +18,6 @@ from driftbrake.exceptions import (
     UserAborted,
 )
 from driftbrake.guard import SchemaGuard
-from driftbrake.policy import Policy, apply_policy, load_policy
 from driftbrake.prompters import NonInteractivePrompter, StdinPrompter
 from driftbrake.protocols import Prompter, Reporter
 from driftbrake.reporters.facade_terminal import FacadeTerminalReporter as TerminalReporter
@@ -55,6 +55,10 @@ class DriftBrake:
         self.schemas = schemas or ["public"]
         self.verbose = verbose
 
+        # Arquivo de política único: se nenhum caminho for dado, usa "policy.yml"
+        # quando presente — a mesma convenção da CLI. Ausente = sem política.
+        if policy_path is None and Path("policy.yml").exists():
+            policy_path = "policy.yml"
         self.policy: Policy = load_policy(policy_path)
         self.guard = SchemaGuard(
             database_url=database_url,
@@ -129,7 +133,8 @@ class DriftBrake:
         """
         result = self.guard.check()
         if self.policy is not None:
-            result = apply_policy(result, self.policy)
+            # Facade lê de um banco Postgres: aplica a base + a seção postgres.
+            result = apply_policy(result, self.policy, engine="postgres")
         decision = decide(
             result=result,
             fail_on=self.fail_on,

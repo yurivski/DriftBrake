@@ -2,9 +2,8 @@ from __future__ import annotations
 
 from datetime import datetime
 
-from driftbrake.classifiers.impact_classifier import ImpactClassifier
-from driftbrake.classifiers.type_compatibility import classify_type_change
-from driftbrake.models import (
+from driftbrake.core.classifier import ImpactClassifier
+from driftbrake.core.models import (
     ChangeType,
     ColumnSchema,
     DatabaseSchema,
@@ -14,6 +13,73 @@ from driftbrake.models import (
     Severity,
     TableSchema,
 )
+from driftbrake.core.type_compatibility import classify_type_change
+from driftbrake.core.type_matrix import classify_type_change as classify_canonical_change
+from driftbrake.core.type_system import CanonicalBase, CanonicalType
+
+_TEMPORAL_BASES = (CanonicalBase.TIMESTAMP.value, CanonicalBase.TIME.value)
+
+
+def _classify_type_change(old_str: str, new_str: str) -> tuple[ChangeType, Severity] | None:
+    """Refinamento canônico de severidade, a única travessia sancionada do
+    caminho legado (matriz de strings) para o `CanonicalType`.
+
+
+    LIMITE ARQUITETURAL (IMPORTANTE).
+
+    atualmente o comparador decide severidade pelo caminho legado (`type_compatibility`,
+    matriz de strings). Esta função é a exceção: ela faz parse da serialização
+    canônica apenas pra reconhecer o refinamento de unidade de timestamp, que a
+    matriz de strings estruturalmente não expressa ("timestamp(us)" vs
+    "timestamp(ms)" colapsam para "timestamp" na matriz legada).
+
+    Este parse é legítimo, e não o re-parse que o `CanonicalType` existe
+    para matar: pra Parquet, a string já é canônica por construção, o
+    `ArrowTypeAdapter` derivou o tipo nativo no reader, então ler a string de
+    volta não reconstrói nada que se possa perder; só recupera o que o adapter já
+    gravou. Para Postgres, não há unidade, e a função cai no caminho legado.
+
+    Este é o único ponto de travessia. Se você é contribuidor e está aqui para adicionar um
+    segundo refinamento (precisão decimal cross-engine, range de unsigned numa
+    comparação Parquet-Postgres, qualquer coisa que a matriz de strings não
+    expresse), pare. Dois casos especiais acoplados ao caminho legado é a fratura
+    da matriz dupla se reconstruindo numa forma nova. A resposta certa pro
+    segundo refinamento é concluir a migração do comparador para o `CanonicalType`,
+    não adicionar um terceiro caso aqui. `test_canonical_seam_is_singular`
+    trava esse limite executavelmente: um segundo `from_string` no comparador
+    quebra o teste de propósito.
+
+    A migração é um refactor, não um salto: `test_matrix_parity.py` prova
+    que as duas matrizes são intercambiáveis hoje, exceto pelo conjunto
+    `_INTENDED` documentado. A única decisão que falta é de produto, não técnica:
+    concluir a migração troca a severidade v0.1.1 de smallint->bigint de SAFE
+    para WARNING no caminho Postgres ao vivo, o que é outward-facing para CI de
+    usuários existentes. Essa decisão é tomada deliberadamente, com bump de versão
+    e nota de changelog, nunca como efeito colateral de adicionar um refinamento
+    aqui.
+
+    Retorna:
+        (TIMESTAMP_UNIT_CHANGED, severidade) quando o refinamento de unidade se
+        aplica (ms<->us via matriz canônica); (TYPE_CHANGED, severidade legada)
+        para qualquer outra mudança; None quando não há claim de unidade de um
+        dos lados (logo sem drift, caso de migração de contrato).
+    """
+    old_ct = CanonicalType.from_string(old_str)
+    new_ct = CanonicalType.from_string(new_str)
+
+    same_temporal_shape = (
+        old_ct.base == new_ct.base
+        and old_ct.base in _TEMPORAL_BASES
+        and old_ct.tz == new_ct.tz
+        and old_ct.params == new_ct.params
+        and old_ct.unit != new_ct.unit
+    )
+    if same_temporal_shape:
+        if old_ct.unit is None or new_ct.unit is None:
+            return None  # contrato sem unidade registrada: sem claim, sem drift fantasma
+        return ChangeType.TIMESTAMP_UNIT_CHANGED, classify_canonical_change(old_ct, new_ct)
+
+    return ChangeType.TYPE_CHANGED, classify_type_change(old_str, new_str)
 
 
 class SchemaComparator:
@@ -226,23 +292,32 @@ class SchemaComparator:
         changes: list[SchemaChange] = []
 
         if expected.type != current.type:
-            severity = self.classifier.classify_type_change(expected.type, current.type)
-            changes.append(
-                self.classifier.build_change(
-                    change_type=ChangeType.TYPE_CHANGED,
-                    severity=severity,
-                    schema_name=schema_name,
-                    table_name=table_name,
-                    column_name=col_name,
-                    field_name="type",
-                    old_value=expected.type,
-                    new_value=current.type,
-                    description=(
+            classified = _classify_type_change(expected.type, current.type)
+            if classified is not None:
+                change_type, severity = classified
+                if change_type == ChangeType.TIMESTAMP_UNIT_CHANGED:
+                    description = (
+                        f"Column '{col_name}' timestamp unit changed from "
+                        f"'{expected.type}' to '{current.type}'."
+                    )
+                else:
+                    description = (
                         f"Column '{col_name}' type changed from '{expected.type}' "
                         f"to '{current.type}'."
-                    ),
+                    )
+                changes.append(
+                    self.classifier.build_change(
+                        change_type=change_type,
+                        severity=severity,
+                        schema_name=schema_name,
+                        table_name=table_name,
+                        column_name=col_name,
+                        field_name="type",
+                        old_value=expected.type,
+                        new_value=current.type,
+                        description=description,
+                    )
                 )
-            )
 
         if expected.nullable != current.nullable:
             if current.nullable:

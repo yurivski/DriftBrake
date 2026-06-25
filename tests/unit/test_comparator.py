@@ -10,7 +10,7 @@ acima de 100 caracteres terão quebras de linhas.
 from datetime import datetime
 from pathlib import Path
 
-from driftbrake.comparators.schema_comparator import SchemaComparator
+from driftbrake.core.comparator import SchemaComparator
 from driftbrake.models import (
     ChangeType,
     ColumnSchema,
@@ -19,7 +19,7 @@ from driftbrake.models import (
     Severity,
     TableSchema,
 )
-from driftbrake.readers.json_reader import JsonSchemaReader
+from driftbrake.readers.json.reader import JsonSchemaReader
 
 
 def _make_db(tables: dict[str, TableSchema], schema: str = "public") -> DatabaseSchema:
@@ -258,6 +258,42 @@ class TestTypeChanged:
         changes = [c for c in result.changes if c.change_type == ChangeType.TYPE_CHANGED]
         assert len(changes) == 1
         assert changes[0].severity == Severity.WARNING
+
+
+class TestTimestampUnitChanged:
+    """Drift #3 do Parquet: muda só a unidade do timestamp -> change_type dedicado."""
+
+    def _dbs(self, old_type: str, new_type: str):
+        def one(t):
+            return _make_db({"t": _make_table("t", columns={"ts": _make_col("ts", type_=t)})})
+
+        return one(old_type), one(new_type)
+
+    def test_ms_to_us_is_timestamp_unit_changed_warning(self):
+        result = comparator.compare(*self._dbs("timestamp(ms)", "timestamp(us)"))
+        assert len(result.changes) == 1
+        assert result.changes[0].change_type == ChangeType.TIMESTAMP_UNIT_CHANGED
+        assert result.changes[0].severity == Severity.WARNING
+
+    def test_us_to_ms_is_timestamp_unit_changed_breaking(self):
+        result = comparator.compare(*self._dbs("timestamp(us)", "timestamp(ms)"))
+        assert len(result.changes) == 1
+        assert result.changes[0].change_type == ChangeType.TIMESTAMP_UNIT_CHANGED
+        assert result.changes[0].severity == Severity.BREAKING
+
+    def test_same_unit_is_no_change(self):
+        result = comparator.compare(*self._dbs("timestamp(us)", "timestamp(us)"))
+        assert result.changes == []
+
+    def test_non_temporal_change_stays_type_changed(self):
+        result = comparator.compare(*self._dbs("integer", "bigint"))
+        assert result.changes[0].change_type == ChangeType.TYPE_CHANGED
+
+    def test_unspecified_unit_contract_is_not_phantom_drift(self):
+        # Contrato antigo (pré-v0.3.0-leva-3) gravou "timestamp" sem unidade; a
+        # leitura nova grava "timestamp(us)". Sem claim de unidade -> sem drift.
+        assert comparator.compare(*self._dbs("timestamp", "timestamp(us)")).changes == []
+        assert comparator.compare(*self._dbs("timestamp(us)", "timestamp")).changes == []
 
 
 class TestNullableChanged:

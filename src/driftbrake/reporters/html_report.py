@@ -7,7 +7,7 @@ from typing import Any
 
 from jinja2 import Environment, FileSystemLoader, PackageLoader
 
-from driftbrake.models import DiffResult, SchemaChange, Severity
+from driftbrake.core.models import DiffResult, SchemaChange, Severity
 
 
 def _make_env(templates_dir: Path | None):

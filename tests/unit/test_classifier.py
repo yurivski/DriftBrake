@@ -4,7 +4,7 @@ Pra evitar que o arquivo fique muito grande, apenas as chamadas com argumentos
 acima de 100 caracteres terão quebras de linhas.
 """
 
-from driftbrake.classifiers.impact_classifier import ImpactClassifier
+from driftbrake.core.classifier import ImpactClassifier
 from driftbrake.models import ColumnSchema, Severity
 
 classifier = ImpactClassifier()

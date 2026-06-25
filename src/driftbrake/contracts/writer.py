@@ -6,7 +6,7 @@ import json
 from importlib.metadata import version as _get_version
 from pathlib import Path
 
-from driftbrake.models import DatabaseSchema
+from driftbrake.core.models import DatabaseSchema
 
 
 class ContractWriter:
@@ -44,8 +44,7 @@ class ContractWriter:
         }
 
     def _serialize_table(self, table) -> dict:
-        return {
-            "columns": {col_name: col.to_dict() for col_name, col in table.columns.items()},
-            "indexes": table.indexes,
-            "check_constraints": table.check_constraints,
-        }
+        # Delega ao serializador do próprio modelo (fonte única). Reimplementar
+        # aqui foi o que deixou `indexes` como objetos IndexSchema crus — não
+        # serializáveis — em vez de `[idx.to_dict() ...]`.
+        return table.to_dict()

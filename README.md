@@ -32,6 +32,8 @@ DriftBrake runs before pipelines execute, verifying that the actual database sti
 
 ## Python package
 
+This package was designed to run before your pipelines; future updates will expand compatibility to other databases and file formats.
+
 This README contains only basic information related to installing DriftBrake via pip. This package is experimental and may change in future versions. DriftBrake can be used through the CLI or (to customize detection policies) implemented directly in code — see the build instructions in ["Python API"](https://driftbrake.pages.dev/#en/python-api).
 
 The Python package for DriftBrake automatically reads the current schema of a PostgreSQL database, compares it against a versioned contract, classifies drifts by impact, and can block pipelines before they break in production.
@@ -45,7 +47,11 @@ The Python package for DriftBrake automatically reads the current schema of a Po
 ```bash
 # Installs the psycopg2-binary driver, required for the postgres connection
 pip install "driftbrake[postgres]"
+# Install pyarrow
+pip install "driftbrake[parquet]"
 ```
+
+For Parquet files, see the [parquet tutorial](https://driftbrake.pages.dev/#en/parquet-guide)
 
 > The `[dev]` extra includes `pre-commit`, `ruff`, `mypy`, `pytest`, and the other development tools.
 

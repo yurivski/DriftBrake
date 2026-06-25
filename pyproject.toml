@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "driftbrake"
-version = "0.2.0"
+version = "0.3.0"
 description = "Detect, classify, and block schema drift in PostgreSQL before your pipelines break"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -37,6 +37,8 @@ dependencies = [
 
 [project.optional-dependencies]
 postgres = ["psycopg2-binary>=2.9"]
+parquet = ["pyarrow>=15.0"]
+all = ["driftbrake[postgres,parquet]"]
 dev = [
     "pytest>=7.0",
     "pytest-cov",
@@ -45,6 +47,10 @@ dev = [
     "build",
     "twine",
     "pre-commit",
+    # Engines opcionais: instalados no dev para que a suíte inteira (inclusive os
+    # testes de Parquet/Postgres) rode com um único `pip install -e .[dev]`.
+    "pyarrow>=15.0",
+    "psycopg2-binary>=2.9",
 ]
 
 [project.urls]

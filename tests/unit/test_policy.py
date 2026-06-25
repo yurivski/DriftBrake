@@ -13,7 +13,7 @@ import pytest
 
 from driftbrake.exceptions import PolicyError
 from driftbrake.models import ChangeType, DiffResult, SchemaChange, Severity
-from driftbrake.policy import Policy, apply_policy, load_policy
+from driftbrake.policy import ParquetPolicy, Policy, PostgresPolicy, apply_policy, load_policy
 
 # helpers
 
@@ -156,6 +156,30 @@ def test_apply_policy_ignores_column():
     assert out.changes[0].column_name == "email"
 
 
+def test_apply_policy_parquet_override_aliases():
+    # nullable_to_required / required_to_nullable apelidam os change_types NOT NULL
+    result = DiffResult(
+        changes=[
+            _change(Severity.BREAKING, change_type=ChangeType.NOT_NULL_CONSTRAINT_ADDED),
+            _change(Severity.WARNING, change_type=ChangeType.NOT_NULL_CONSTRAINT_REMOVED),
+        ]
+    )
+    policy = Policy(overrides={"nullable_to_required": "WARNING", "required_to_nullable": "SAFE"})
+    out = apply_policy(result, policy)
+    by_type = {c.change_type: c.severity for c in out.changes}
+    assert by_type[ChangeType.NOT_NULL_CONSTRAINT_ADDED] == Severity.WARNING
+    assert by_type[ChangeType.NOT_NULL_CONSTRAINT_REMOVED] == Severity.SAFE
+
+
+def test_apply_policy_timestamp_unit_override():
+    result = DiffResult(
+        changes=[_change(Severity.WARNING, change_type=ChangeType.TIMESTAMP_UNIT_CHANGED)]
+    )
+    policy = Policy(overrides={"timestamp_unit_changed": "BREAKING"})
+    out = apply_policy(result, policy)
+    assert out.changes[0].severity == Severity.BREAKING
+
+
 def test_apply_policy_overrides_severity():
     result = DiffResult(changes=[_change(Severity.BREAKING, change_type=ChangeType.COLUMN_REMOVED)])
     policy = Policy(overrides={"column_removed": "WARNING"})
@@ -178,3 +202,110 @@ def test_apply_policy_preserves_metadata():
     assert out.compared_at == ts
     assert out.expected_source == "a"
     assert out.current_source == "b"
+
+
+# ---------------------------------------------------------------------------
+# Política por engine: base agnóstica + seções postgres/parquet
+# ---------------------------------------------------------------------------
+
+
+def test_load_policy_parses_both_engine_sections():
+    policy = load_policy(
+        _write_yaml(
+            """
+overrides:
+  column_removed: BREAKING
+ignore_tables:
+  - audit_log
+postgres:
+  overrides:
+    index_removed: BREAKING
+parquet:
+  dataset:
+    dominant_schema_strategy: latest_mtime
+    max_divergent_files: 2
+  overrides:
+    timestamp_unit_changed: BREAKING
+"""
+        )
+    )
+    assert policy.overrides == {"column_removed": "BREAKING"}
+    assert policy.ignore_tables == ["audit_log"]
+    assert policy.postgres is not None
+    assert policy.postgres.overrides == {"index_removed": "BREAKING"}
+    assert policy.parquet is not None
+    assert policy.parquet.dataset.dominant_schema_strategy == "latest_mtime"
+    assert policy.parquet.dataset.max_divergent_files == 2
+    assert policy.parquet.overrides == {"timestamp_unit_changed": "BREAKING"}
+
+
+def test_missing_engine_sections_default_to_none():
+    policy = load_policy(_write_yaml("overrides:\n  column_removed: BREAKING\n"))
+    assert policy.postgres is None
+    assert policy.parquet is None
+
+
+def test_invalid_severity_in_postgres_section_raises():
+    with pytest.raises(PolicyError):
+        load_policy(_write_yaml("postgres:\n  overrides:\n    index_removed: NONSENSE\n"))
+
+
+def test_effective_overrides_merges_base_with_engine():
+    policy = Policy(
+        overrides={"column_removed": "BREAKING", "default_changed": "WARNING"},
+        postgres=PostgresPolicy(overrides={"index_removed": "BREAKING"}),
+        parquet=ParquetPolicy(overrides={"timestamp_unit_changed": "BREAKING"}),
+    )
+    # base sozinha
+    assert policy.effective_overrides() == {
+        "column_removed": "BREAKING",
+        "default_changed": "WARNING",
+    }
+    # base + postgres
+    assert policy.effective_overrides("postgres") == {
+        "column_removed": "BREAKING",
+        "default_changed": "WARNING",
+        "index_removed": "BREAKING",
+    }
+    # base + parquet
+    assert policy.effective_overrides("parquet") == {
+        "column_removed": "BREAKING",
+        "default_changed": "WARNING",
+        "timestamp_unit_changed": "BREAKING",
+    }
+
+
+def test_engine_section_overrides_base_key():
+    # mesma key na base e na seção do engine: a seção vence, e só para aquele engine
+    policy = Policy(
+        overrides={"column_removed": "BREAKING"},
+        parquet=ParquetPolicy(overrides={"column_removed": "WARNING"}),
+    )
+    assert policy.effective_overrides()["column_removed"] == "BREAKING"
+    assert policy.effective_overrides("postgres")["column_removed"] == "BREAKING"
+    assert policy.effective_overrides("parquet")["column_removed"] == "WARNING"
+
+
+def test_engines_are_isolated_in_apply_policy():
+    # Um column_removed é classificado diferente por engine, sem duplicar a base.
+    policy = Policy(
+        overrides={"column_removed": "BREAKING"},
+        parquet=ParquetPolicy(overrides={"column_removed": "SAFE"}),
+    )
+    res = DiffResult(changes=[_change(Severity.BREAKING, change_type=ChangeType.COLUMN_REMOVED)])
+
+    pg = apply_policy(res, policy, engine="postgres")
+    pq = apply_policy(res, policy, engine="parquet")
+    assert pg.changes[0].severity == Severity.BREAKING  # herda a base
+    assert pq.changes[0].severity == Severity.SAFE  # seção parquet sobrescreve
+
+
+def test_apply_policy_without_engine_uses_base_only():
+    # backward-compat: sem engine, seções são ignoradas (comportamento pré-v0.3.0).
+    policy = Policy(
+        overrides={"column_removed": "BREAKING"},
+        parquet=ParquetPolicy(overrides={"column_removed": "SAFE"}),
+    )
+    res = DiffResult(changes=[_change(Severity.WARNING, change_type=ChangeType.COLUMN_REMOVED)])
+    out = apply_policy(res, policy)
+    assert out.changes[0].severity == Severity.BREAKING

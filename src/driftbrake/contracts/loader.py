@@ -6,9 +6,9 @@ import json
 from pathlib import Path
 from typing import Any
 
+from driftbrake.core.models import DatabaseSchema
 from driftbrake.exceptions import SchemaContractNotFoundError
-from driftbrake.models import DatabaseSchema
-from driftbrake.readers.json_reader import JsonSchemaReader
+from driftbrake.readers.json.reader import JsonSchemaReader
 
 # Campos sempre obrigatórios (presentes em ambos os formatos)
 REQUIRED_FIELDS = {"database_type", "generated_at", "schemas"}

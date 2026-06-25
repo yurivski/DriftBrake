@@ -2,7 +2,7 @@
 
 from abc import ABC, abstractmethod
 
-from driftbrake.models import DatabaseSchema
+from driftbrake.core.models import DatabaseSchema
 
 
 class SchemaReader(ABC):

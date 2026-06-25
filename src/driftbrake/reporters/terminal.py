@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from driftbrake.models import DiffResult, Severity
+from driftbrake.core.models import DiffResult, Severity
 
 
 def _severity_style(severity: Severity) -> str:

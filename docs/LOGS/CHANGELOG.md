@@ -11,6 +11,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <br>
 
+## [0.3.0] (2026-06-24)
+
+The Parquet release. DriftBrake gains a second engine and consolidates configuration into a single file. The PostgreSQL workflow is unchanged, everything new is additive, and a contract stays engine-neutral.
+
+### Added
+
+- **Parquet engine.** Read Parquet files, datasets, and data-lake folders as schema sources, with the same `init` / `check` / `diff` workflow as PostgreSQL, the same severities (`SAFE` / `WARNING` / `BREAKING`), and the same exit codes. Install with the `[parquet]` extra (`pyarrow`), or `[all]` for both engines. `import driftbrake` never loads `pyarrow` until a Parquet path is used.
+
+- **A directory is one or more tables.** Files are grouped by column affinity: files that share most of their column names are the same table (a dataset, with inter-file divergence detection); files with mostly disjoint columns are different tables. A `silver/` folder of distinct entities becomes a contract with one table per entity; a partitioned dataset (`part-00000.parquet`, or `year=/month=/`) becomes a single table; subdirectories become separate tables. `init` captures every table.
+
+- **Inter-file divergence detection.** Within a dataset, DriftBrake reports which files diverge from the dominant schema (a different type on a shared column, or a missing/added column). The dominant schema strategy (`most_common`, `first_file`, `latest_mtime`) and the divergence tolerance (`max_divergent_files`) are configurable.
+
+- **Physical vs logical type drift.** Timestamp precision (`timestamp(ms)` vs `timestamp(us)`) is preserved through canonicalization and surfaced as the new `ChangeType.TIMESTAMP_UNIT_CHANGED`, with policy override key `timestamp_unit_changed`.
+
+- **Canonical type system.** Arrow types map to the same canonical vocabulary the PostgreSQL reader uses, so a PostgreSQL `integer` and a Parquet `int32` compare as equal and a contract is engine-neutral. DriftBrake reads only the Parquet footer (metadata), never the data rows.
+
+- **Parquet CLI.** New `parquet-check` command (focused inter-file divergence scan); `--source` on `init` and `check`; `--table` to name a single table; `--strategy` and `--max-divergent` on `parquet-check`.
+
+- **Per-engine policy.** The policy file gains optional `postgres:` and `parquet:` sections on top of the agnostic base. The base applies to every engine; a section overrides or adds for its engine. Resolved via `Policy.effective_overrides("postgres" | "parquet")`.
+
+- **Documentation.** New Engines page (what each engine reads and the drift it catches) and Parquet tutorial (a progressive walkthrough from one command to a Python gate).
+
+### Changed
+
+- **One configuration file.** `policy.yml` is now the single config, read by both the CLI and the library, for both engines, and applied on `check`. The flag is `--policy` (default `policy.yml`); `--config` is kept as a deprecated alias. The example file is now `policy.example.yml`. The gate threshold stays the `--fail-on` flag and the `fail_on` library argument, separate from the policy.
+
+### Notes
+
+- Internal reorganization into `core/` (engine-agnostic: `models`, `comparator`, `classifier`, the canonical `type_system` / `type_matrix`, `decision`, `policy`, `protocols`) and `readers/` (one adapter per source: `postgres`, `parquet`, `json`). The public API is preserved: `from driftbrake import ...` and the stable module paths keep working.
+- 1733 tests.
+
 ## [0.2.0] (2026-06-07)
 
 Minor release with four breaking changes to the internal `ChangeType` enum and contract format. Library consumers who inspect `change_type` values or iterate over `DiffResult.changes` must update — all other usage is unchanged.

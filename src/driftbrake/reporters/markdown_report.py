@@ -4,13 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from driftbrake.models import DiffResult, Severity
-
-_SEVERITY_EMOJI = {
-    Severity.BREAKING: "🔴",
-    Severity.WARNING: "🟡",
-    Severity.SAFE: "🟢",
-}
+from driftbrake.core.models import DiffResult, Severity
 
 _SEVERITY_LABEL = {
     Severity.BREAKING: "BREAKING",
@@ -86,14 +80,12 @@ class MarkdownReporter:
             lines.append("|----------|--------|-------------|--------|-------|")
 
             for change in changes:
-                emoji = _SEVERITY_EMOJI.get(change.severity, "⚪")
                 label = _SEVERITY_LABEL.get(change.severity, change.severity.value)
                 col = f"`{change.column_name}`" if change.column_name else "—"
                 old_val = f"`{change.old_value}`" if change.old_value is not None else "—"
                 new_val = f"`{change.new_value}`" if change.new_value is not None else "—"
                 lines.append(
-                    f"| {emoji} {label} | {col} | {change.change_type.value} "
-                    f"| {old_val} | {new_val} |"
+                    f"| {label} | {col} | {change.change_type.value} | {old_val} | {new_val} |"
                 )
 
             lines.append("")

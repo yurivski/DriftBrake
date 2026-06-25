@@ -1,9 +1,9 @@
 {
   "contract_version": "1.0",
   "generated_by": "driftbrake",
-  "driftbrake_version": "0.2.0",
+  "driftbrake_version": "0.3.0",
   "database_type": "postgresql",
-  "generated_at": "2026-05-19T14:28:00.517828",
+  "generated_at": "2026-06-23T13:23:50.909829",
   "schemas": {
     "public": {
       "tables": {
@@ -193,106 +193,6 @@
           "indexes": [],
           "check_constraints": []
         },
-        "customers": {
-          "columns": {
-            "customer_id": {
-              "type": "INTEGER",
-              "nullable": false,
-              "default": null,
-              "primary_key": true,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 1
-            },
-            "customer_fname": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 2
-            },
-            "customer_lname": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 3
-            },
-            "customer_email": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 4
-            },
-            "customer_password": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 5
-            },
-            "customer_street": {
-              "type": "VARCHAR(255)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 6
-            },
-            "customer_city": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 7
-            },
-            "customer_state": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 8
-            },
-            "customer_zipcode": {
-              "type": "VARCHAR(45)",
-              "nullable": false,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 9
-            },
-            "coluna_teste": {
-              "type": "INTEGER",
-              "nullable": true,
-              "default": null,
-              "primary_key": false,
-              "unique": false,
-              "foreign_key": [],
-              "ordinal_position": 10
-            }
-          },
-          "indexes": [
-            "idx_cities"
-          ],
-          "check_constraints": [
-            "coluna_teste > 10"
-          ]
-        },
         "categories": {
           "columns": {
             "category_id": {
@@ -326,6 +226,102 @@
           "indexes": [],
           "check_constraints": []
         },
+        "customers": {
+          "columns": {
+            "customer_id": {
+              "type": "INTEGER",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 1
+            },
+            "customer_fname": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 2
+            },
+            "customer_lname": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 3
+            },
+            "customer_email": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 4
+            },
+            "customer_password": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 5
+            },
+            "customer_street": {
+              "type": "VARCHAR(255)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 6
+            },
+            "customer_city": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 7
+            },
+            "customer_state": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 8
+            },
+            "customer_zipcode": {
+              "type": "VARCHAR(45)",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 9
+            },
+            "coluna_teste": {
+              "type": "INTEGER",
+              "nullable": true,
+              "default": null,
+              "primary_key": false,
+              "unique": false,
+              "foreign_key": [],
+              "ordinal_position": 10
+            }
+          },
+          "indexes": [],
+          "check_constraints": []
+        },
         "usuarios_teste": {
           "columns": {
             "id": {
@@ -338,7 +334,7 @@
               "ordinal_position": 1
             },
             "nome": {
-              "type": "VARCHAR(200)",
+              "type": "VARCHAR(20)",
               "nullable": true,
               "default": null,
               "primary_key": false,
@@ -375,7 +371,14 @@
             }
           },
           "indexes": [
-            "rg_unico_obrigatorio"
+            {
+              "name": "rg_unico_obrigatorio",
+              "columns": [
+                "rg"
+              ],
+              "unique": true,
+              "type": "btree"
+            }
           ],
           "check_constraints": []
         },
@@ -424,8 +427,22 @@
             }
           },
           "indexes": [
-            "idx_nome_teste",
-            "unique_pontuacao"
+            {
+              "name": "idx_nome_teste",
+              "columns": [
+                "nome_teste"
+              ],
+              "unique": false,
+              "type": "btree"
+            },
+            {
+              "name": "unique_pontuacao",
+              "columns": [
+                "pontuacao_teste"
+              ],
+              "unique": true,
+              "type": "btree"
+            }
           ],
           "check_constraints": [
             "pontuacao_teste > 10"

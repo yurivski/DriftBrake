@@ -1,0 +1,63 @@
+# policy.example.yml
+# Copie para policy.yml e ajuste conforme o seu projeto.
+#
+# Arquivo de política único do DriftBrake. Controle total das políticas num só
+# lugar, lido tanto pela CLI quanto pela biblioteca, para os dois tipos de schema
+# (banco Postgres e arquivos Parquet):
+#
+#   CLI:         driftbrake check --policy policy.yml
+#                (policy.yml é o padrão; pode omitir o --policy)
+#   biblioteca:  DriftBrake.from_env(policy_path="policy.yml").protect()
+#                (se existir um policy.yml no diretório, ele é usado por padrão)
+#
+# As mudanças são aplicadas como pós-processamento sobre o resultado da
+# comparação: sobrescrevem severidades e ignoram tabelas/colunas.
+
+# Sobrescreve a severidade padrão de um change_type.
+# Chave = valor do change_type (ex.: ordinal_position_changed, index_removed).
+# Valor = BREAKING | WARNING | SAFE
+overrides:
+  ordinal_position_changed: SAFE
+  index_removed: SAFE
+
+# Ignora tabelas inteiras: nenhuma mudança nelas é reportada.
+ignore_tables:
+  - alembic_version
+  - django_migrations
+  - flyway_schema_history
+
+# Ignora colunas específicas. Formato exato: "tabela.coluna".
+ignore_columns:
+  - orders.updated_at
+  - customers.last_login
+
+# 
+# Seções por engine (opcionais)
+# 
+# Tudo acima é agnóstico: vale igual para Postgres e Parquet. As seções abaixo
+# adicionam só o que é específico de cada engine, sem duplicar a base.
+#
+# Precedência: a base aplica a todos os engines; a seção do engine sobrescreve
+# ou adiciona por cima. Uma mesma key na base e na seção -> a seção vence, e só
+# para aquele engine (os engines ficam isolados; a base continua única).
+#
+# Comece unificado com seções. Se um dia uma seção crescer demais, aí sim você
+# quebra em arquivos separados, mas não duplique ignore_tables/ignore_columns.
+
+# Específico de Postgres: o engine não tem vocabulário de tipo físico, então a
+# seção carrega só overrides, útil para afinar uma severidade só no Postgres.
+postgres:
+  overrides:
+    index_removed: WARNING   # ex.: mais estrito no Postgres do que a base SAFE
+
+# Específico de Parquet: o vocabulário que o Postgres não tem.
+parquet:
+  # Como decidir qual é o "schema verdadeiro" quando os arquivos divergem.
+  dataset:
+    dominant_schema_strategy: most_common  # most_common | first_file | latest_mtime
+    max_divergent_files: 0                  # acima disso, falha (0 = zero tolerância)
+    ignore_partition_columns: true          # colunas de partição vêm do path, não são drift
+  overrides:
+    timestamp_unit_changed: BREAKING   # ms -> us: quebra quem lê assumindo a unidade antiga
+    nullable_to_required: BREAKING     # Parquet tem required/optional no nível físico
+    required_to_nullable: WARNING

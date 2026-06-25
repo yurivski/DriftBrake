@@ -6,8 +6,8 @@ import os
 from datetime import datetime
 from typing import Any
 
+from driftbrake.core.models import ColumnSchema, DatabaseSchema, IndexSchema, TableSchema
 from driftbrake.exceptions import SchemaConnectionError, SchemaNotFoundError
-from driftbrake.models import ColumnSchema, DatabaseSchema, IndexSchema, TableSchema
 from driftbrake.readers.base import SchemaReader
 
 

@@ -10,8 +10,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
+from driftbrake.core.models import Severity
 from driftbrake.exceptions import ConfigurationError
-from driftbrake.models import Severity
 
 DEFAULT_FAIL_ON = [Severity.BREAKING]
 DEFAULT_WARN_ON = [Severity.WARNING]
@@ -64,7 +64,7 @@ class Settings:
         if not path.exists():
             raise ConfigurationError(
                 f"Configuration file not found: {path}\n"
-                "Create a driftbrake.yml file or use driftbrake.example.yml as a template."
+                "Create a policy.yml file or use policy.example.yml as a template."
             )
 
         try:
@@ -115,15 +115,14 @@ class Settings:
         columns_ignore = column_cfg.get("ignore", {}) if isinstance(column_cfg, dict) else {}
 
         # O formato v0.0.2 (tables.ignore / columns.ignore aninhados) foi removido em v0.2.0.
-        # Use driftbrake.policy.yml com ignore_tables / ignore_columns.
+        # Use policy.yml com ignore_tables / ignore_columns.
         if (isinstance(table_cfg, dict) and "ignore" in table_cfg) or (
             isinstance(column_cfg, dict) and "ignore" in column_cfg
         ):
             raise ConfigurationError(
                 f"'{path}' uses the removed v0.0.2 config format "
                 "(tables.ignore / columns.ignore). "
-                "Migrate to driftbrake.policy.yml with ignore_tables / ignore_columns. "
-                "See DOCUMENTATION.md § 'Policy files' for migration details."
+                "Migrate to policy.yml with ignore_tables / ignore_columns."
             )
 
         rules = raw.get("rules", {})

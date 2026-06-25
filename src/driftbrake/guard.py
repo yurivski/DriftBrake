@@ -12,12 +12,12 @@ import sys
 from pathlib import Path
 from typing import Any
 
-from driftbrake.classifiers.impact_classifier import ImpactClassifier
-from driftbrake.comparators.schema_comparator import SchemaComparator
 from driftbrake.config.settings import Settings
 from driftbrake.contracts.loader import ContractLoader
+from driftbrake.core.classifier import ImpactClassifier
+from driftbrake.core.comparator import SchemaComparator
+from driftbrake.core.models import DiffResult, Severity
 from driftbrake.exceptions import SchemaConnectionError
-from driftbrake.models import DiffResult, Severity
 from driftbrake.readers.postgres import PostgresSchemaReader
 from driftbrake.reporters.html_report import HtmlReporter
 from driftbrake.reporters.json_report import JsonReporter

@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from driftbrake.models import DiffResult
+from driftbrake.core.models import DiffResult
 
 
 class JsonReporter:
