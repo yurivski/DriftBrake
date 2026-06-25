@@ -15,10 +15,16 @@ from __future__ import annotations
 
 from datetime import datetime
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from driftbrake.core.models import ColumnSchema, DatabaseSchema, TableSchema
 from driftbrake.exceptions import MissingDependencyError, ParquetReadError
 from driftbrake.readers.base import SchemaReader
+
+if TYPE_CHECKING:
+    # Só para tipagem: não executa em runtime, então não puxa o PyArrow (mantém
+    # o import de `driftbrake` lazy quanto ao engine Parquet).
+    from driftbrake.readers.parquet.dataset import DatasetSchema
 
 
 class ParquetSchemaReader(SchemaReader):
@@ -43,8 +49,8 @@ class ParquetSchemaReader(SchemaReader):
         self.dominant_schema_strategy = dominant_schema_strategy
         self.ignore_partition_columns = ignore_partition_columns
         # preenchidos por read():
-        self.table_datasets: dict = {}  # {nome_tabela: DatasetSchema}
-        self.dataset_schema = None  # atalho: o único dataset, se houver só um
+        self.table_datasets: dict[str, DatasetSchema] = {}  # {nome_tabela: DatasetSchema}
+        self.dataset_schema: DatasetSchema | None = None  # atalho: o único, se houver um só
 
     def _require_pyarrow(self) -> None:
         try:
