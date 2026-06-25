@@ -392,6 +392,7 @@ Initial release published to reserve the `driftbrake` name on PyPI.
 
 ---
 
+[0.3.0]: https://github.com/yurivski/DriftBrake/releases/tag/v0.3.0
 [0.2.0]: https://github.com/yurivski/DriftBrake/releases/tag/v0.2.0
 [0.1.1]: https://github.com/yurivski/DriftBrake/releases/tag/v0.1.1
 [0.1.0]: https://github.com/yurivski/DriftBrake/releases/tag/v0.1.0
